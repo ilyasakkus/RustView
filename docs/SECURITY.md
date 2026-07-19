@@ -1,241 +1,252 @@
-# RustView güvenlik tasarımı
+# RustView security design
 
-Bu belge RustView'in teknik güvenlik modelini açıklar. Güvenlik açığı bildirmek için
-depo kökündeki [SECURITY.md](../SECURITY.md) belgesini kullanın.
+This document describes RustView's technical security model. To report a
+vulnerability, use [SECURITY.md](../SECURITY.md) in the repository root.
 
 > [!IMPORTANT]
-> RustView erken MVP aşamasındadır; bağımsız güvenlik denetiminden geçmemiştir.
-> Buradaki hedefler tasarım invariant'larıdır, üretim güvenliği sertifikası değildir.
+> RustView is an early MVP and has not undergone an independent security audit.
+> The statements here are design invariants, not a certification of production
+> security.
 
-## Korunan varlıklar
+## Protected assets
 
-- Host ekranındaki görüntünün gizliliği
-- Host'a uygulanan fare/klavye olaylarının bütünlüğü ve yetkilendirilmesi
-- 16 karakterlik geçici erişim parolası, türetilmiş 32 baytlık Noise PSK'sı ve
-  oturum anahtarları
-- Host'un yerel onay kararı ve seçtiği izinler
-- İstemci ve relay süreçlerinin erişilebilirliği/bellek güvenliği
+- Confidentiality of the host's screen contents
+- Integrity and authorization of mouse/keyboard events applied to the host
+- The 16-character temporary access password, derived 32-byte Noise PSK, and
+  session keys
+- The host's local approval decision and selected permissions
+- Availability and memory safety of client and relay processes
 
-## Güven sınırları
+## Trust boundaries
 
-RustView üç temel aktör varsayar:
+RustView assumes three primary actors:
 
-- **Host:** Paylaşılan bilgisayar ve nihai yetki noktasıdır.
-- **Controller:** Host'un herkese açık cihaz kimliği ve geçici erişim parolasına
-  sahip olup bağlantı isteyen uzak istemcidir.
-- **Relay:** İki TCP akışını eşleştirip baytları iletir; güvenilir kabul edilmez.
+- **Host:** The computer being shared and the final authorization point.
+- **Controller:** The remote client that possesses the host's public device ID and
+  temporary access password and requests a connection.
+- **Relay:** Matches two TCP streams and forwards bytes; it is not trusted.
 
-Relay'e ekran veya giriş plaintext'i emanet edilmez. Cihaz kimliği + geçici
-paroladan türetilen PSK uçtan uca bağlantı sırrıdır; 9 haneli cihaz kimliği tek
-başına bir kimlik doğrulama sırrı değildir. İşletim sistemi ve yerel kullanıcı hesabı
-trusted computing base içindedir; yerel admin/root ya da host sürecine kod enjekte
-edebilen zararlı yazılıma karşı koruma vaat edilmez.
+The relay is not trusted with plaintext screen or input data. The PSK derived from
+the device ID + temporary password is the end-to-end connection secret; the
+nine-digit device ID alone is not an authentication secret. The operating system
+and local user account are part of the trusted computing base. RustView does not
+promise protection against malware with local Administrator/root privileges or the
+ability to inject code into the host process.
 
-## Tehdit aktörleri
+## Threat actors
 
-Model aşağıdaki saldırganları kapsar:
+The model covers:
 
-- Ağı dinleyen veya paketleri değiştiren kişi
-- Kötü niyetli ya da ele geçirilmiş relay operatörü
-- Herkese açık 9 haneli cihaz kimliğini bilen fakat geçici parolayı bilmeyen kişi
-- Eski veya yenilenmiş bir geçici parolayı tekrar kullanmaya çalışan kişi
-- Bozuk, aşırı büyük veya beklenmeyen protokol mesajı gönderen peer
-- Relay'i bağlantı/bant genişliği ile tüketmeye çalışan istemci
-- Bağlandıktan sonra izin yükseltmeye çalışan controller
+- An attacker who observes or modifies network traffic
+- A malicious or compromised relay operator
+- A person who knows the public nine-digit device ID but not the temporary password
+- A person attempting to reuse an old or regenerated temporary password
+- A peer sending malformed, oversized, or unexpected protocol messages
+- A client attempting to exhaust relay connections or bandwidth
+- A controller attempting to elevate permissions after connecting
 
-Şunlar kapsam dışıdır:
+The following are out of scope:
 
-- Host veya controller işletim sisteminde admin/root seviyesinde compromise
-- Kullanıcının geçerli cihaz kimliği ve geçici parolayı saldırgana vermesi
-- Trafik analizi ve IP gizliliği
-- Dağıtık hizmet engellemenin tamamen önlenmesi
-- Fiziksel erişimi olan saldırgan
-- Ekrandaki bilginin yetkili controller tarafından kaydedilmesi
+- Administrator/root-level compromise of the host or controller operating system
+- The user giving a valid device ID and temporary password to an attacker
+- Traffic-analysis resistance and IP-address privacy
+- Complete prevention of distributed denial of service
+- Attackers with physical access
+- An authorized controller recording displayed information
 
-## Cihaz kimliği, geçici parola ve entropi
+## Device ID, temporary password, and entropy
 
-- `DeviceId`, kurulum başına üretilen ve `000 000 001`–`999 999 999` aralığında
-  gösterilen 9 haneli herkese açık kimliktir. Kullanıcı config dizinindeki
-  `device-id` dosyasına yazılır; paylaşılması tek başına erişim vermez.
-- `AccessPassword`, her uygulama açılışında OS rastgelelik kaynağından üretilen,
-  karışıklık yaratmayan 32 sembollü alfabeden 16 karakterlik/80-bit bir sırdır.
-  Diske yazılmaz, `Debug` içinde redakte edilir ve kullanıcı tarafından yenilenebilir.
-- Kimlik ve parola birlikte, iki ayrı BLAKE2s domain'i altında 10 bayt relay route'u
-  ve 32 bayt Noise PSK'sı üretir. Route yalnız cihaz kimliğinden türetilmez ve
-  PSK'nın prefix'i değildir.
-- Relay `Register`/`Claim` mesajında yalnız türetilmiş route'u görür. Cihaz kimliği,
-  erişim parolası ve PSK relay'e düz metin gönderilmez.
+- `DeviceId` is a nine-digit public identifier generated once per installation and
+  displayed in the range `000 000 001`–`999 999 999`. It is written to the
+  `device-id` file in the user's configuration directory; sharing it alone does not
+  grant access.
+- `AccessPassword` is a 16-character/80-bit secret generated from the OS randomness
+  source on every application launch using an unambiguous 32-symbol alphabet. It
+  is never written to disk, is redacted from `Debug`, and can be regenerated by the
+  user.
+- Together, the identity and password produce a 10-byte relay route and a 32-byte
+  Noise PSK under two separate BLAKE2s domains. The route is not derived from the
+  device ID alone and is not a prefix of the PSK.
+- In `Register`/`Claim` messages, the relay sees only the derived route. The device
+  ID, access password, and PSK are not sent to the relay in plaintext.
 
-80-bit parola insan seçimi düşük entropili bir PIN değildir; 10 bayt OS
-rastgeleliğinin 16 Base32 sembolüne tam kodlanmasıdır. Yine de geçerli cihaz kimliği
-ve parolayı birlikte ele geçiren kişi bağlantı isteği yapabilir. Bu iki değer güvenli
-bir kanaldan paylaşılmalı; erişim parolası issue, log veya ekran görüntüsünde
-yayımlanmamalıdır. Parolanın UI'da yenilenmesi yeni route ve PSK üretir.
+The 80-bit password is not a low-entropy, user-chosen PIN; it is an exact encoding
+of 10 bytes of OS randomness into 16 Base32 symbols. Nevertheless, anyone who
+obtains both a valid device ID and password can request a connection. These values
+must be shared through a secure channel, and the access password must not be posted
+in an issue, log, or screenshot. Regenerating the password in the UI produces a new
+route and PSK.
 
-Parola uygulama çalıştığı sürece birden fazla bağlantı isteğinde kullanılabilir;
-relay'deki tek bir kayıt yalnız bir claim ile tüketilir ve desktop sonraki istek için
-yeniden kayıt olabilir. Bu nedenle güvenlik yalnız relay'in tek kullanımına dayanmaz:
-her gelen istek host ekranında yeniden açık yerel onay gerektirir. Gözetimsiz erişim
-yoktur.
+The password may be reused for several connection requests while the application is
+running. A single relay registration is consumed by one claim, and the desktop can
+register again for the next request. Security therefore does not depend solely on
+the relay's single-use behavior: every incoming request requires new, explicit
+local approval on the host. Unattended access is not available.
 
-Core içindeki `Invitation` primitive'i türetilmiş route ve PSK'yı secure-channel
-katmanına taşır. `RV1.<BASE32_ROUTE>.<BASE64URL_SECRET>` codec'i legacy, test ve iç
-entegrasyon için kalır; desktop UI bu metni kullanıcıya göstermez ve kullanıcıdan
-istemez. Bir `RV1` metni ayrıca serialize edilirse doğrudan türetilmiş PSK içerdiği
-için gizli capability olarak korunmalıdır.
+Core's `Invitation` primitive carries the derived route and PSK into the
+secure-channel layer. The `RV1.<BASE32_ROUTE>.<BASE64URL_SECRET>` codec remains for
+legacy, testing, and internal integration. The desktop UI neither displays nor
+requests this text. If an `RV1` value is serialized, it directly contains the
+derived PSK and must therefore be protected as a secret capability.
 
-`RUSTVIEW_CONFIG_DIR`, kalıcı herkese açık `device-id` ve secret olmayan
-`relay-address` ayarının dizinini override eder; erişim parolası bu dizine yazılmaz.
+`RUSTVIEW_CONFIG_DIR` overrides the directory containing the persistent public
+`device-id` and non-secret `relay-address` setting. The access password is not
+written to this directory.
 
-## Kriptografik protokol
+## Cryptographic protocol
 
-MVP aşağıdaki sabit Noise suite'ini `snow` üzerinden kullanır:
+The MVP uses the following fixed Noise suite through `snow`:
 
 ```text
 Noise_XXpsk0_25519_ChaChaPoly_BLAKE2s
 ```
 
-- `XX`: İki tarafın static Noise anahtarlarını el sıkışma içinde doğrular.
-- `psk0`: Cihaz kimliği + geçici paroladan domain-separated türetilen 32 baytlık
-  PSK, ilk handshake mesajından önce key schedule'a karıştırılır.
-- `25519`: Diffie-Hellman primitive'i.
+- `XX`: Authenticates both parties' static Noise keys during the handshake.
+- `psk0`: Mixes the 32-byte PSK, domain-separated from the device ID + temporary
+  password, into the key schedule before the first handshake message.
+- `25519`: The Diffie–Hellman primitive.
 - `ChaChaPoly`: Authenticated encryption.
-- `BLAKE2s`: Handshake hash/KDF bileşeni.
+- `BLAKE2s`: The handshake hash/KDF component.
 
-Noise el sıkışması tamamlanmadan uygulama mesajı, ekran yakalama veya uzaktan giriş
-başlatılmaz. Transport modunda her şifreli kaydın authentication tag'i doğrulanır;
-doğrulama hatası oturumu kapatır. Nonce tekrar kullanımına izin verilmez ve sayaç
-taşmasına ulaşmadan bağlantı sonlandırılır.
+No application message, screen capture, or remote input starts before the Noise
+handshake completes. In transport mode, the authentication tag of every encrypted
+record is verified; a verification failure closes the session. Nonce reuse is not
+allowed, and the connection terminates before counter exhaustion.
 
-Geçici erişim parolası, türetilmiş PSK, handshake state ve transport anahtarları
-mümkün olan en kısa süre bellekte tutulmalı ve `zeroize` ile temizlenmelidir. Bu
-değerler `Debug`, hata, telemetry veya panic mesajlarına yazılmaz.
+Temporary access passwords, derived PSKs, handshake state, and transport keys must
+remain in memory for the shortest practical time and be cleared with `zeroize`.
+These values are never written to `Debug`, error, telemetry, or panic messages.
 
-### Kimlik sınırı
+### Identity boundary
 
-Core static Noise keypair üretme ve caller'ın sağladığı keypair ile oturum kurma
-API'si sağlar. Hedef; cihaz anahtarını OS key store'da saklamak ve ilk onaydan sonra
-peer fingerprint'ini pinlemektir. Ancak desktop entegrasyonu bunu tamamlayana kadar
-9 haneli herkese açık ID kriptografik cihaz kimliği sayılmaz; el sıkışma yalnız ID
-ve geçici paroladan türetilen PSK'ya sahipliği doğrular.
+Core provides APIs to generate static Noise key pairs and establish a session with
+a caller-supplied key pair. The goal is to store the device key in the secure OS key
+store and pin a peer fingerprint after first approval. Until desktop integration is
+complete, however, the public nine-digit ID is not a cryptographic device identity;
+the handshake proves only possession of the PSK derived from the ID and temporary
+password.
 
-Kalıcı bir PKI, hesap sistemi veya sertifika otoritesi MVP kapsamında değildir.
-Uygulama fingerprint'i gerçekten saklayıp sonraki oturumda karşılaştırmadan
-“doğrulanmış kişi/cihaz kimliği” iddiasında bulunmaz.
+A persistent PKI, account system, or certificate authority is outside the MVP
+scope. RustView does not claim a “verified person/device identity” until the
+application actually stores a fingerprint and compares it in later sessions.
 
-## Relay'in bildikleri
+## What the relay knows
 
-Relay şunları **göremez**:
+The relay **cannot see**:
 
-- Kullanıcıya gösterilen cihaz kimliği ve erişim parolası
-- Türetilmiş 32 baytlık Noise PSK'sı
-- Noise plaintext'i
-- Ekran karelerinin içeriği
-- Fare ve klavye olaylarının içeriği
+- The device ID and access password shown to the user
+- The derived 32-byte Noise PSK
+- Noise plaintext
+- Screen-frame contents
+- Mouse and keyboard event contents
 
-Relay şunları **görebilir**:
+The relay **can see**:
 
-- Her iki ucun IP adresi ve bağlantı zamanı
-- Route değeri ve hangi iki bağlantının eşleştiği
-- Trafik hacmi, yönü, paket/zamanlama örüntüsü ve oturum süresi
-- Protokol seviyesinde Register/Claim/Ping kontrol mesajları
+- Both endpoints' IP addresses and connection times
+- The route value and which two connections are paired
+- Traffic volume, direction, packet/timing patterns, and session duration
+- Protocol-level `Register`/`Claim`/`Ping` control messages
 
-Kötü relay trafiği düşürebilir, geciktirebilir, yeniden sıralayabilir veya başka bir
-peer ile eşleştirmeyi deneyebilir. Doğru ID + geçici paroladan türetilen PSK olmadan
-Noise doğrulamasını geçemez; fakat route'u önce claim ederek hizmet engelleyebilir.
-Bu nedenle RustView “anonim” veya “zero-knowledge relay” olarak tanımlanmaz; doğru
-ifade “içeriği açmadan ileten kör relay”dir.
+A malicious relay can drop, delay, or reorder traffic or attempt to pair an
+endpoint with a different peer. It cannot pass Noise authentication without the PSK
+derived from the correct ID + temporary password, but it can deny service by
+claiming the route first. RustView is therefore not described as an “anonymous” or
+“zero-knowledge relay”; the accurate term is a “blind relay that forwards content
+without decrypting it.”
 
-## Yetkilendirme ve kullanıcı onayı
+## Authorization and user consent
 
-- Uzak kullanıcı önce herkese açık 9 haneli ID'yi, ayrı modalda geçici parolayı
-  girer; her iki uç aynı relay adresini kullanmalıdır.
-- Her gelen oturum host cihazında görünür bir yerel onay gerektirir.
-- Varsayılan izin view-only'dir; control ayrı ve açık bir seçimdir.
-- Onay UI'sı uzaktan gelen input işlenmeye başlamadan gösterilir.
-- Uzak peer kendi permission bitmask'ini yükseltemez.
-- Aktif oturum host tarafında kalıcı ve belirgin bir gösterge sunmalıdır.
-- Host tek eylemle kontrolü durdurabilmeli veya bağlantıyı kesebilmelidir.
-- Disconnect/pause sırasında tüm sentetik basılı tuş ve düğmeler bırakılmalıdır.
-- Gözetimsiz erişim, kalıcı parola ve arka planda gizli kontrol MVP'de yoktur.
+- The remote user first enters the public nine-digit ID, then the temporary
+  password in a separate dialog; both endpoints must use the same relay address.
+- Every incoming session requires visible local approval on the host computer.
+- The default permission is view-only; control is a separate, explicit selection.
+- The approval UI appears before any remote input is processed.
+- A remote peer cannot elevate its own permission bitmask.
+- The host must show a persistent, prominent indicator for an active session.
+- The host must be able to stop control or disconnect in one action.
+- All synthetically pressed keys and buttons must be released on disconnect/pause.
+- The MVP has no unattended access, persistent password, or hidden background
+  control.
 
-## Protokol ve kaynak güvenliği
+## Protocol and resource safety
 
-Network input her zaman saldırgan kontrollü kabul edilir:
+Network input is always treated as attacker-controlled:
 
-- Framing length değerleri allocation öncesinde üst sınırla kontrol edilir.
-- Control mesajları, frame payload'u, çözünürlük, stream/oturum sayısı ve handshake
-  süresi ayrı limitlere sahiptir.
-- `postcard` decode hatası fail-closed davranır.
-- JPEG decode yalnız desteklenen format ve boyutlarda yapılır.
-- Capture/encode/network/decode kuyrukları bounded'dır; en yeni kare politikasıyla
-  eski kare düşürülebilir.
-- Bekleyen relay route'ları TTL sonunda kaldırılır.
-- Idle, handshake, write ve mutlak relay oturum timeout'u uygulanır.
-- Relay'de toplam ve aynı IP'den eşzamanlı bağlantılar için kota uygulanır; daha
-  gelişmiş token-bucket/bant genişliği limitleri public servis öncesi gereklidir.
+- Framing length values are checked against upper bounds before allocation.
+- Control messages, frame payloads, resolution, stream/session count, and handshake
+  duration have separate limits.
+- `postcard` decode errors fail closed.
+- JPEG decoding is limited to supported formats and dimensions.
+- Capture/encode/network/decode queues are bounded; stale frames may be discarded
+  under a newest-frame policy.
+- Pending relay routes are removed when their TTL expires.
+- Idle, handshake, write, and absolute relay-session timeouts are enforced.
+- The relay enforces total and per-IP concurrent-connection quotas; more advanced
+  token-bucket and bandwidth limits are required before operating a public service.
 
-Bu kontrollerden herhangi biri henüz kodda yoksa public internet deployment'ından
-önce tamamlanması release blocker'dır.
+If any of these controls is missing from the implementation, it is a release
+blocker for public internet deployment.
 
-## Platform güvenlik sınırları
+## Platform security boundaries
 
 ### macOS
 
-Screen Recording ve Accessibility ayrı kullanıcı izinleridir. RustView bu izinleri
-atlatmaz. LoginWindow, korumalı içerik ve bazı sistem yüzeyleri yakalanamayabilir.
-Uygulama tüm süreç olarak root çalıştırılmaz.
+Screen Recording and Accessibility are separate user permissions. RustView does not
+bypass them. LoginWindow, protected content, and some system surfaces may not be
+capturable. The application is not run as root.
 
 ### Windows
 
-Normal kullanıcı oturumu hedeflenir. UAC secure desktop ve oturum açma ekranı MVP'de
-kontrol edilmez. Tüm uygulamayı Administrator olarak çalıştırmak önerilmez. Gelecekte
-elevated helper gerekirse ayrı, imzalı, en az yetkili süreç ve doğrulanmış yerel IPC
-ile tasarlanmalıdır.
+The normal user session is targeted. The UAC secure desktop and login screen are not
+controlled in the MVP. Running the entire application as Administrator is not
+recommended. If a future elevated helper is required, it must be designed as a
+separate, signed, least-privileged process with authenticated local IPC.
 
 ### Linux
 
-X11, istemciler arası güçlü izolasyon sağlamaz; aynı oturumdaki başka X11 istemcileri
-giriş ve ekran verisine erişebilir. Wayland daha sıkı bir model kullanır: ekran seçimi
-XDG portal/PipeWire tarafından kullanıcıya sorulur, giriş ise compositor/portal
-desteğine bağlıdır. RustView portalı bypass etmez ve destek yoksa view-only kalır.
+X11 does not provide strong isolation between clients; another X11 client in the
+same session can access input and screen data. Wayland uses a stricter model:
+screen selection is presented to the user through XDG Portal/PipeWire, and input
+depends on compositor/portal support. RustView does not bypass the portal and
+remains view-only when support is unavailable.
 
-## Loglama ve operasyon
+## Logging and operations
 
-Şunlar loglanmaz:
+RustView does not log:
 
-- Geçici erişim parolası, türetilmiş PSK veya serialize edilmiş iç `RV1`
-- Noise key material/ciphertext payload dump'ı
-- Ekran görüntüsü/JPEG içeriği
-- Tuşlar veya yazılan metin
+- The temporary access password, derived PSK, or serialized internal `RV1`
+- Noise key material or ciphertext payload dumps
+- Screenshots or JPEG contents
+- Keys or typed text
 
-Route gibi korelasyon değerleri de varsayılan loglarda tam gösterilmemeli; gerekirse
-kısaltılmış/hash'lenmiş tanılama kimliği kullanılmalıdır. Relay erişim loglarının
-saklama süresi minimumda tutulur.
+Correlation values such as routes should not appear in full in default logs. When
+needed, use a shortened or hashed diagnostic identifier. Relay access-log retention
+should be minimized.
 
-Public relay için bağlantı, bant genişliği ve bekleyen route kotaları; TLS ile relay
-sunucu transport koruması; güvenli güncelleme; secret yönetimi ve gözlemleme ayrıca
-operasyonel gereksinimlerdir. Noise içerik güvenliği, kötü yapılandırılmış bir public
-servisi otomatik olarak güvenli kılmaz.
+A public relay additionally requires connection, bandwidth, and pending-route
+quotas; TLS protection for relay-server transport; secure updates; secret
+management; and observability. Noise content security does not automatically make a
+misconfigured public service safe.
 
-## Bağımlılık ve release güvenliği
+## Dependency and release security
 
-Üretim release'i öncesinde en az aşağıdakiler gerekir:
+At minimum, the following are required before a production release:
 
-- `cargo audit` ve `cargo deny` kontrolleri
-- Lockfile ve bağımlılık lisans/policy incelemesi
-- Protocol/framing, cihaz kimliği/parola ve iç `Invitation` parser fuzzing
-- Noise negative/replay/mutation testleri
-- macOS, Windows ve Linux gerçek cihaz smoke testleri
-- SBOM ve yeniden üretilebilir release kaydı
-- İmzalı macOS/Windows paketleri ve yayın bütünlüğü doğrulaması
-- Bağımsız güvenlik tasarım incelemesi
+- `cargo audit` and `cargo deny` checks
+- Lockfile and dependency license/policy review
+- Fuzzing for protocol/framing, device ID/password handling, and the internal
+  `Invitation` parser
+- Noise negative/replay/mutation tests
+- Real-device smoke tests on macOS, Windows, and Linux
+- An SBOM and reproducible-release record
+- Signed macOS/Windows packages and release-integrity verification
+- Independent security-design review
 
-## Gelecekte QUIC/iroh geçişi
+## Future QUIC/iroh migration
 
-QUIC veya iroh, doğrudan bağlantı ve daha iyi stream önceliği sağlayabilir. Bu geçiş
-Noise'i körlemesine kaldırma gerekçesi değildir. Endpoint identity'nin
-credential-derived PSK'ya, ALPN/protokol sürümüne ve session transcript'ine nasıl
-bağlandığı incelenmelidir.
-0-RTT içinde onay, auth veya input mesajı gönderilmemelidir. Relay değişse de yerel
-onay ve permission state machine aynı kalır.
+QUIC or iroh may provide direct connectivity and better stream prioritization. That
+does not justify removing Noise without analysis. The design must examine how
+endpoint identity binds to the credential-derived PSK, ALPN/protocol version, and
+session transcript. Approval, authentication, and input messages must not be sent
+in 0-RTT data. Local consent and the permission state machine remain unchanged even
+if the relay changes.

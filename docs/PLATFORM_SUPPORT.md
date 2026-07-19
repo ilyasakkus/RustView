@@ -1,78 +1,81 @@
-# Platform desteği
+# Platform support
 
-RustView tek bir çapraz-platform codebase hedefler; ancak ekran yakalama ve uzaktan
-giriş, işletim sisteminin güvenlik modeline bağlıdır. “Derleniyor” ile “destekleniyor”
-aynı şey değildir. Aşağıdaki tablo ilk MVP hedefini ve bilinen sınırları gösterir.
+RustView targets a single cross-platform codebase, but screen capture and remote
+input depend on each operating system's security model. “Compiles” and “supported”
+are not the same. The table below shows the initial MVP target and known
+limitations.
 
-## Destek özeti
+## Support summary
 
-| Platform | UI | Ekran yakalama | Uzak giriş | İlk MVP durumu |
+| Platform | UI | Screen capture | Remote input | Initial MVP status |
 | --- | --- | --- | --- | --- |
-| macOS 13+ Intel/Apple Silicon | Hedefleniyor | `xcap`; Screen Recording izni | `enigo`; Accessibility izni | Hedeflenen, gerçek cihaz doğrulaması gerekli |
-| Windows 10/11 x64 | Hedefleniyor | `xcap`; normal kullanıcı masaüstü | `enigo`; normal kullanıcı oturumu | Hedeflenen, gerçek cihaz doğrulaması gerekli |
-| Linux X11 x86_64 | Hedefleniyor | `xcap` | `enigo` `x11rb` | Hedeflenen, dağıtım/DE testi gerekli |
-| Linux Wayland x86_64 | Hedefleniyor | `xcap` tek-kare capture; compositor/portal'a bağlı | Bilinçli olarak devre dışı | Deneysel görüntüleme; zorunlu view-only fallback |
+| macOS 13+ Intel/Apple Silicon | Targeted | `xcap`; Screen Recording permission | `enigo`; Accessibility permission | Targeted; real-device validation required |
+| Windows 10/11 x64 | Targeted | `xcap`; normal user desktop | `enigo`; normal user session | Targeted; real-device validation required |
+| Linux X11 x86_64 | Targeted | `xcap` | `enigo` with `x11rb` | Targeted; distribution/desktop-environment testing required |
+| Linux Wayland x86_64 | Targeted | `xcap` single-frame capture; depends on compositor/portal | Deliberately disabled | Experimental viewing; mandatory view-only fallback |
 
-MVP medya hedefi tüm platformlarda tek seçili ekran için 720p, 5-10 FPS JPEG'dir.
-Çoklu monitör, HDR, yüksek refresh rate, donanım codec'i ve sistem sesi destek sözü
-değildir.
+The MVP media target on every platform is a single selected display encoded as
+720p JPEG at 5–10 FPS. Multi-display support, HDR, high refresh rates,
+hardware-accelerated codecs, and system audio are not promised.
 
 ## macOS
 
-### Hedef
+### Target
 
-- macOS 13 veya üzeri
-- Intel ve Apple Silicon release build'leri
-- Normal kullanıcı oturumunda ekran paylaşımı ve onaylı kontrol
+- macOS 13 or later
+- Release builds for Intel and Apple Silicon
+- Screen sharing and approved control in a normal user session
 
-### İzinler
+### Permissions
 
-1. **Screen Recording:** Ekran veya pencere içeriğini yakalamak için gerekir.
-2. **Accessibility:** Fare/klavye olayı üretmek için ayrı olarak gerekir.
+1. **Screen Recording:** Required to capture screen or window content.
+2. **Accessibility:** Separately required to generate mouse and keyboard events.
 
-İzinler System Settings → Privacy & Security altında kullanıcı tarafından verilir.
-İzin verildikten sonra RustView'i tamamen kapatıp yeniden açmak gerekebilir. Bir
-binary'nin yolu veya imzası değiştiğinde macOS izni tekrar sorabilir; geliştirme
-build'lerinde bu daha sık görülür.
+Users grant these permissions under System Settings → Privacy & Security. RustView
+may need to be completely closed and reopened after permission is granted. macOS
+may ask again when a binary's path or signature changes; this occurs more often for
+development builds.
 
-### Bilinen sınırlar
+### Known limitations
 
-- LoginWindow ve bazı güvenli sistem yüzeyleri paylaşılmaz/kontrol edilmez.
-- DRM veya korumalı video siyah görünebilir.
-- Klavye düzeni, Mission Control ve global shortcut'lar ek test gerektirir.
-- İlk MVP `xcap` kullanır. Uzun vadeli performans backend'i ScreenCaptureKit'tir.
-- Uygulama root olarak çalıştırılmamalıdır.
+- LoginWindow and some secure system surfaces are not shared or controlled.
+- DRM or protected video may appear black.
+- Keyboard layouts, Mission Control, and global shortcuts require further testing.
+- The initial MVP uses `xcap`. ScreenCaptureKit is the long-term performance backend.
+- The application must not be run as root.
 
 ## Windows
 
-### Hedef
+### Target
 
-- 64-bit Windows 10 ve Windows 11
-- Normal masaüstü oturumunda ekran paylaşımı ve onaylı kontrol
+- 64-bit Windows 10 and Windows 11
+- Screen sharing and approved control in a normal desktop session
 
-### İzinler ve sınırlar
+### Permissions and limitations
 
-- Normal masaüstü capture'ı çoğunlukla ek bir izin diyaloğu gerektirmez.
-- **UAC secure desktop**, Ctrl+Alt+Del ekranı ve oturum açma ekranı MVP'de
-  yakalanamaz veya kontrol edilemez.
-- RustView tüm uygulamayı Administrator olarak başlatmaz ve bunu normal çözüm olarak
-  önermemelidir.
-- Administrator pencerelerine input, process integrity level nedeniyle kısıtlanabilir.
-- DRM/korumalı içerik siyah olabilir.
-- DPI scaling ve farklı ölçek kullanan çoklu monitörler ayrıca doğrulanmalıdır.
+- Normal desktop capture generally does not require an additional permission
+  dialog.
+- The **UAC secure desktop**, Ctrl+Alt+Del screen, and login screen cannot be
+  captured or controlled in the MVP.
+- RustView does not launch the entire application as Administrator and must not
+  recommend doing so as a normal workaround.
+- Input to Administrator windows may be restricted by process integrity levels.
+- DRM/protected content may appear black.
+- DPI scaling and multiple monitors with different scaling require separate
+  validation.
 
-İlk MVP `xcap` ve `enigo` kullanır. Gelecekte dirty rectangle, cursor shape ve daha
-düşük kopyalama maliyeti için DXGI Desktop Duplication/Windows Graphics Capture
-backend'i planlanır.
+The initial MVP uses `xcap` and `enigo`. A DXGI Desktop Duplication/Windows Graphics
+Capture backend is planned for dirty rectangles, cursor shapes, and lower copying
+costs.
 
 ## Linux/X11
 
-### Hedef
+### Target
 
-- Ubuntu 24.04 tabanlı CI build'i
-- Yaygın X11 masaüstlerinde `xcap` capture ve `enigo`/`x11rb` input
+- Ubuntu 24.04-based CI builds
+- `xcap` capture and `enigo`/`x11rb` input on common X11 desktops
 
-Gerekli paket adları dağıtıma göre değişir. Ubuntu/Debian örneği:
+Required package names vary by distribution. Example for Ubuntu/Debian:
 
 ```bash
 sudo apt-get install -y \
@@ -81,65 +84,68 @@ sudo apt-get install -y \
   libxkbcommon-dev libxrandr-dev
 ```
 
-### Güvenlik notu
+### Security note
 
-X11 aynı display'e bağlı istemciler arasında güçlü izolasyon sağlamaz. Başka bir
-yerel X11 istemcisi ekran/giriş verisine erişebilir veya sentetik input üretebilir.
-RustView'in uçtan uca ağ şifrelemesi bu yerel X11 riskini çözmez.
+X11 does not provide strong isolation between clients attached to the same display.
+Another local X11 client may access screen/input data or generate synthetic input.
+RustView's end-to-end network encryption does not address this local X11 risk.
 
-### Bilinen sınırlar
+### Known limitations
 
-- Dağıtım, window manager, klavye düzeni ve XWayland kombinasyonları değişkendir.
-- Fractional scaling ve negatif monitör koordinatları ek test ister.
-- Headless X server resmi MVP hedefi değildir.
-- Root altında çalıştırmak desteklenen çözüm değildir.
+- Distribution, window manager, keyboard-layout, and XWayland combinations vary.
+- Fractional scaling and negative monitor coordinates need additional testing.
+- A headless X server is not an official MVP target.
+- Running as root is not a supported workaround.
 
 ## Linux/Wayland
 
-Wayland, uygulamaların sessizce ekran okumasını veya global input üretmesini bilinçli
-olarak engeller. RustView bu modeli bypass etmez.
+Wayland deliberately prevents applications from silently reading the screen or
+generating global input. RustView does not bypass this model.
 
-### Ekran yakalama
+### Screen capture
 
-Mevcut MVP kalıcı bir PipeWire ScreenCast akışı kurmaz; her kare için `xcap`'in
-tek-kare capture yolunu kullanır. Bu yol GNOME screenshot API'si, XDG Screenshot
-portal'ı veya wlroots capture desteğine bağlı olarak çalışabilir. Yerel erişim için
-relay'e kaydolmak ekran iznini otomatik olarak vermez. Portal diyaloğu
-tekrarlanabilir, capture başarısız olabilir ve X11/macOS/Windows için hedeflenen
-5-10 FPS Wayland'da garanti edilmez.
+The current MVP does not maintain a persistent PipeWire ScreenCast stream; it uses
+`xcap`'s single-frame capture path for each frame. Depending on the compositor,
+this path may use the GNOME screenshot API, XDG Screenshot portal, or wlroots
+capture support. Registering with the relay for local access does not automatically
+grant screen permission. The portal dialog may be repeated, capture may fail, and
+the 5–10 FPS target for X11/macOS/Windows is not guaranteed on Wayland.
 
-### Uzak giriş
+### Remote input
 
-Mevcut Linux build'i `enigo` için yalnız `x11rb` özelliğini açar; Wayland/libei
-özellikleri etkin değildir. Uygulama `XDG_SESSION_TYPE`/`WAYLAND_DISPLAY` üzerinden
-Wayland oturumunu algıladığında XWayland `DISPLAY` değeri bulunsa bile native input
-backend'ini açmaz. Capture çalışırsa kontrol isteği view-only iznine düşürülür.
+The current Linux build enables only the `x11rb` feature for `enigo`; Wayland/libei
+features are not enabled. When the application detects a Wayland session through
+`XDG_SESSION_TYPE`/`WAYLAND_DISPLAY`, it does not enable the native input backend,
+even if an XWayland `DISPLAY` value exists. If capture works, a control request
+falls back to view-only permission.
 
-Üretim desteği için XDG RemoteDesktop + ScreenCast portal oturumunun birlikte
-yönetilmesi, PipeWire stream koordinatlarının input region ile eşlenmesi ve libei
-desteği planlanır. GNOME, KDE Plasma ve wlroots tabanlı compositor'lar ayrı ayrı
-gerçek cihazda doğrulanmalıdır.
+Production support requires jointly managing XDG RemoteDesktop and ScreenCast
+portal sessions, mapping PipeWire stream coordinates to the input region, and
+adding libei support. GNOME, KDE Plasma, and wlroots-based compositors must each be
+validated separately on real devices.
 
-## Ortak görüntü ve giriş sınırları
+## Shared display and input limitations
 
-- İlk MVP tek seçili ekranı paylaşır.
-- HDR doğru renk dönüşümü garanti edilmez; SDR JPEG hedeflenir.
-- Cursor görüntüsü/konumu platforma göre kareye gömülü veya ayrı olabilir.
-- IME, dead key, AltGr, medya tuşları ve farklı klavye düzenleri tam desteklenmeyebilir.
-- Controller ve host farklı DPI/ölçeğe sahipse koordinatlar clamp edilmelidir.
-- Disconnect'te sentetik olarak basılı kalan key/button'lar serbest bırakılmalıdır.
+- The initial MVP shares one selected display.
+- Correct HDR color conversion is not guaranteed; SDR JPEG is targeted.
+- Depending on the platform, the cursor image/position may be embedded in the frame
+  or handled separately.
+- IMEs, dead keys, AltGr, media keys, and different keyboard layouts may not be
+  fully supported.
+- Coordinates must be clamped when controller and host use different DPI/scaling.
+- Synthetically pressed keys and buttons must be released on disconnect.
 
-## Bir platformu “destekleniyor” sayma ölçütü
+## Criteria for marking a platform “supported”
 
-Bir satırın deneysel durumdan destekleniyor durumuna geçmesi için:
+Before a row moves from experimental to supported:
 
-1. Temiz sistemde kurulum ve açılış test edilmeli.
-2. İzin reddi, sonradan izin verme ve izin iptali akışları test edilmeli.
-3. En az 30 dakika capture/view ve control smoke testi geçmeli.
-4. HiDPI ve en az iki klavye düzeni denenmeli.
-5. Bağlantı kopması sonrasında giriş state'i temizlenmeli.
-6. Bilinen sınırlar release notlarında yayımlanmalı.
+1. Installation and startup must be tested on a clean system.
+2. Permission denial, later approval, and permission revocation flows must be tested.
+3. At least 30 minutes of capture/view and control smoke testing must pass.
+4. HiDPI and at least two keyboard layouts must be tested.
+5. Input state must be cleared after disconnection.
+6. Known limitations must be published in the release notes.
 
-Yeni platform sonuçları katkı olarak gönderilirken işletim sistemi sürümü, desktop
-environment/compositor, display protocol, mimari ve test edilen RustView commit'i
-belirtilmelidir.
+When contributing new platform results, include the operating-system version,
+desktop environment/compositor, display protocol, architecture, and tested RustView
+commit.

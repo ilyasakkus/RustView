@@ -97,13 +97,13 @@ impl RustViewApp {
             device_id: None,
             access_password: None,
             host_worker: None,
-            host_status: "Yerel kimlik hazırlanıyor".to_owned(),
+            host_status: "Preparing local identity".to_owned(),
             host_error: None,
             host_retry_at: None,
             host_retry_attempt: 0,
             host_session_active: false,
             viewer_worker: None,
-            viewer_status: "Bağlantı yok".to_owned(),
+            viewer_status: "Not connected".to_owned(),
             remote_id_input: String::new(),
             remote_password_input: String::new(),
             request_control: false,
@@ -130,8 +130,10 @@ impl RustViewApp {
         match load_or_create_device_id() {
             Ok(device_id) => self.device_id = Some(device_id),
             Err(error) => {
-                self.host_status = "Yerel kimlik oluşturulamadı".to_owned();
-                self.error = Some(format!("RustView kimliği hazırlanamadı: {error:#}"));
+                self.host_status = "Could not create local identity".to_owned();
+                self.error = Some(format!(
+                    "Could not prepare the RustView identity: {error:#}"
+                ));
                 return;
             }
         }
@@ -139,8 +141,10 @@ impl RustViewApp {
         match AccessPassword::generate() {
             Ok(password) => self.access_password = Some(password),
             Err(error) => {
-                self.host_status = "Geçici parola üretilemedi".to_owned();
-                self.error = Some(format!("Geçici erişim parolası üretilemedi: {error}"));
+                self.host_status = "Could not generate a temporary password".to_owned();
+                self.error = Some(format!(
+                    "Could not generate a temporary access password: {error}"
+                ));
                 return;
             }
         }
@@ -154,13 +158,13 @@ impl RustViewApp {
         self.host_session_active = false;
 
         let (Some(device_id), Some(password)) = (&self.device_id, &self.access_password) else {
-            self.host_status = "Yerel erişim kullanılamıyor".to_owned();
+            self.host_status = "Local access is unavailable".to_owned();
             return;
         };
         let relay_address = self.relay_address.trim();
         if relay_address.is_empty() {
-            self.host_status = "Relay adresi gerekli".to_owned();
-            self.host_error = Some("Relay adresi boş bırakılamaz.".to_owned());
+            self.host_status = "Relay address required".to_owned();
+            self.host_error = Some("The relay address cannot be empty.".to_owned());
             return;
         }
 
@@ -168,11 +172,14 @@ impl RustViewApp {
         match network::start_host(relay_address.to_owned(), invitation) {
             Ok(worker) => {
                 self.host_worker = Some(worker);
-                self.host_status = "Relay'e bağlanıyor".to_owned();
+                self.host_status = "Connecting to the relay".to_owned();
                 self.host_error = None;
             }
             Err(error) => {
-                self.schedule_host_restart(format!("Relay kaydı başlatılamadı: {error:#}"), true);
+                self.schedule_host_restart(
+                    format!("Could not start relay registration: {error:#}"),
+                    true,
+                );
             }
         }
     }
@@ -203,7 +210,7 @@ impl RustViewApp {
         self.grant_control = false;
         self.host_session_active = false;
         self.host_retry_attempt = 0;
-        self.host_status = "Yerel erişim yeniden başlatılıyor".to_owned();
+        self.host_status = "Restarting local access".to_owned();
         self.host_retry_at = Some(Instant::now() + delay);
     }
 
@@ -216,11 +223,11 @@ impl RustViewApp {
                 }
                 self.access_password = Some(password);
                 self.host_retry_attempt = 0;
-                self.notice = Some("Yeni geçici parola oluşturuldu.".to_owned());
+                self.notice = Some("A new temporary password was generated.".to_owned());
                 self.start_host_now();
             }
             Err(error) => {
-                self.error = Some(format!("Yeni erişim parolası üretilemedi: {error}"));
+                self.error = Some(format!("Could not generate a new access password: {error}"));
             }
         }
     }
@@ -232,11 +239,12 @@ impl RustViewApp {
                 self.relay_address.clone_from(&address);
                 self.relay_draft = address;
                 self.error = None;
-                self.notice = Some("Relay ayarı kaydedildi; yerel erişim yenileniyor.".to_owned());
+                self.notice =
+                    Some("Relay settings saved. Local access is reconnecting.".to_owned());
                 self.restart_host_after(HOST_RESTART_AFTER_REFRESH);
             }
             Err(error) => {
-                self.error = Some(format!("Relay ayarı kaydedilemedi: {error:#}"));
+                self.error = Some(format!("Could not save relay settings: {error:#}"));
             }
         }
     }
@@ -244,7 +252,7 @@ impl RustViewApp {
     fn open_password_dialog(&mut self) {
         self.error = None;
         if self.remote_id_input.trim().parse::<DeviceId>().is_err() {
-            self.error = Some("Geçerli bir RustView cihaz kimliği girin.".to_owned());
+            self.error = Some("Enter a valid RustView device ID.".to_owned());
             return;
         }
         self.remote_password_input.clear();
@@ -256,14 +264,14 @@ impl RustViewApp {
         let device_id = match self.remote_id_input.trim().parse::<DeviceId>() {
             Ok(device_id) => device_id,
             Err(error) => {
-                self.error = Some(format!("Cihaz kimliği geçersiz: {error}"));
+                self.error = Some(format!("Invalid device ID: {error}"));
                 return;
             }
         };
         let password = match self.remote_password_input.trim().parse::<AccessPassword>() {
             Ok(password) => password,
             Err(error) => {
-                self.error = Some(format!("Erişim parolası geçersiz: {error}"));
+                self.error = Some(format!("Invalid access password: {error}"));
                 return;
             }
         };
@@ -275,14 +283,14 @@ impl RustViewApp {
         ) {
             Ok(worker) => {
                 self.viewer_worker = Some(worker);
-                self.viewer_status = "Uzak bilgisayara bağlanıyor".to_owned();
+                self.viewer_status = "Connecting to the remote device".to_owned();
                 self.password_dialog_open = false;
                 self.remote_password_input.clear();
                 self.notice = None;
                 self.texture = None;
                 self.remote_size = [0, 0];
             }
-            Err(error) => self.error = Some(format!("Bağlantı başlatılamadı: {error:#}")),
+            Err(error) => self.error = Some(format!("Could not start the connection: {error:#}")),
         }
     }
 
@@ -324,7 +332,7 @@ impl RustViewApp {
         for event in host_events {
             match event {
                 Event::Status(status) => {
-                    if status.contains("bekleniyor") {
+                    if status.starts_with("Waiting for a connection") {
                         self.host_retry_attempt = 0;
                         self.host_error = None;
                     }
@@ -336,7 +344,7 @@ impl RustViewApp {
                 } => {
                     self.pending_peer = Some((peer_name, requested_control));
                     self.grant_control = false;
-                    self.host_status = "Yerel onay bekleniyor".to_owned();
+                    self.host_status = "Waiting for local approval".to_owned();
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
                 Event::Active { remote_control } => {
@@ -344,9 +352,9 @@ impl RustViewApp {
                     self.host_session_active = true;
                     self.host_retry_attempt = 0;
                     self.host_status = if remote_control {
-                        "Gelen oturum aktif · kontrol açık"
+                        "Incoming session active · control enabled"
                     } else {
-                        "Gelen oturum aktif · yalnız görüntüleme"
+                        "Incoming session active · view only"
                     }
                     .to_owned();
                 }
@@ -370,9 +378,9 @@ impl RustViewApp {
                 Event::Active { remote_control } => {
                     self.control_enabled = remote_control;
                     self.viewer_status = if remote_control {
-                        "Bağlandı · klavye ve fare kontrolü açık"
+                        "Connected · keyboard and mouse control enabled"
                     } else {
-                        "Bağlandı · yalnız görüntüleme"
+                        "Connected · view only"
                     }
                     .to_owned();
                 }
@@ -383,12 +391,14 @@ impl RustViewApp {
                 }
                 Event::Error(message) => {
                     self.stop_viewer(false);
-                    self.viewer_status = "Bağlantı kapandı".to_owned();
+                    self.viewer_status = "Connection closed".to_owned();
                     self.error = Some(message);
                 }
                 Event::IncomingRequest { .. } => {
                     self.stop_viewer(false);
-                    self.error = Some("Uzak uçtan beklenmeyen bir oturum isteği geldi.".to_owned());
+                    self.error = Some(
+                        "Received an unexpected session request from the remote peer.".to_owned(),
+                    );
                 }
             }
         }
@@ -441,7 +451,7 @@ impl RustViewApp {
                             .size(21.0),
                     );
                     ui.label(
-                        RichText::new("Açık kaynak uzak masaüstü")
+                        RichText::new("Open-source remote desktop")
                             .color(Color32::from_white_alpha(205)),
                     );
 
@@ -449,16 +459,14 @@ impl RustViewApp {
                         if self.viewer_worker.is_some()
                             && ui
                                 .add(
-                                    Button::new(
-                                        RichText::new("Oturumu kapat").color(Color32::WHITE),
-                                    )
-                                    .fill(Color32::from_black_alpha(55))
-                                    .stroke(Stroke::new(1.0, Color32::from_white_alpha(90))),
+                                    Button::new(RichText::new("End session").color(Color32::WHITE))
+                                        .fill(Color32::from_black_alpha(55))
+                                        .stroke(Stroke::new(1.0, Color32::from_white_alpha(90))),
                                 )
                                 .clicked()
                         {
                             self.stop_viewer(true);
-                            self.notice = Some("Uzak oturum kapatıldı.".to_owned());
+                            self.notice = Some("The remote session was closed.".to_owned());
                         }
                         let (status, healthy) = self.header_status();
                         Frame::new()
@@ -486,7 +494,7 @@ impl RustViewApp {
         }
         let retrying = self.host_worker.is_none() && self.host_retry_at.is_some();
         let status = if retrying {
-            "Yerel erişim yeniden bağlanıyor".to_owned()
+            "Reconnecting local access".to_owned()
         } else {
             self.host_status.clone()
         };
@@ -502,18 +510,18 @@ impl RustViewApp {
                     .inner_margin(Margin::symmetric(16, 22)),
             )
             .show(root, |ui| {
-                ui.label(RichText::new("ÇALIŞMA ALANI").small().strong().color(MUTED));
+                ui.label(RichText::new("WORKSPACE").small().strong().color(MUTED));
                 ui.add_space(10.0);
-                if nav_button(ui, "Uzak erişim", self.page == Page::RemoteAccess) {
+                if nav_button(ui, "Remote access", self.page == Page::RemoteAccess) {
                     self.page = Page::RemoteAccess;
                 }
-                if nav_button(ui, "Ayarlar", self.page == Page::Settings) {
+                if nav_button(ui, "Settings", self.page == Page::Settings) {
                     self.page = Page::Settings;
                 }
 
                 ui.with_layout(Layout::bottom_up(Align::LEFT), |ui| {
                     ui.label(
-                        RichText::new("RustView · erken erişim")
+                        RichText::new("RustView · early access")
                             .small()
                             .color(Color32::from_rgb(113, 119, 131)),
                     );
@@ -531,7 +539,7 @@ impl RustViewApp {
                                 } else {
                                     ACCENT
                                 }));
-                                ui.label(RichText::new("Bu cihaz").strong());
+                                ui.label(RichText::new("This device").strong());
                             });
                             ui.label(RichText::new(&self.host_status).small().color(MUTED));
                             if let Some(retry_at) = self.host_retry_at {
@@ -540,12 +548,12 @@ impl RustViewApp {
                                     .as_secs_f32()
                                     .ceil() as u64;
                                 ui.label(
-                                    RichText::new(format!("{seconds} sn içinde yeniden denenecek"))
+                                    RichText::new(format!("Retrying in {seconds}s"))
                                         .small()
                                         .color(ACCENT),
                                 );
                             }
-                            if ui.small_button("Şimdi yenile").clicked() {
+                            if ui.small_button("Retry now").clicked() {
                                 self.restart_host_after(HOST_RESTART_AFTER_REFRESH);
                             }
                         });
@@ -587,9 +595,9 @@ impl RustViewApp {
     fn remote_access_page(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
-                ui.heading(RichText::new("Uzak erişim").size(27.0));
+                ui.heading(RichText::new("Remote access").size(27.0));
                 ui.label(
-                    RichText::new("Bu cihazı paylaşın veya başka bir RustView cihazına bağlanın.")
+                    RichText::new("Share this device or connect to another RustView device.")
                         .color(MUTED),
                 );
             });
@@ -616,14 +624,14 @@ impl RustViewApp {
             .device_id
             .as_ref()
             .map(ToString::to_string)
-            .unwrap_or_else(|| "Kullanılamıyor".to_owned());
+            .unwrap_or_else(|| "Unavailable".to_owned());
         let password = self.access_password.as_ref().map(AccessPassword::expose);
         let mut rotate = false;
 
         surface(ui, width, |ui| {
             ui.set_min_height(370.0);
             ui.horizontal(|ui| {
-                section_badge(ui, "BU CİHAZ", ACCENT);
+                section_badge(ui, "THIS DEVICE", ACCENT);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.label(RichText::new("●").color(if self.host_worker.is_some() {
                         SUCCESS
@@ -632,11 +640,11 @@ impl RustViewApp {
                     }));
                     ui.label(
                         RichText::new(if self.host_session_active {
-                            "Oturumda"
+                            "In session"
                         } else if self.host_worker.is_some() {
-                            "Erişilebilir"
+                            "Available"
                         } else {
-                            "Yeniden bağlanıyor"
+                            "Reconnecting"
                         })
                         .small()
                         .color(MUTED),
@@ -644,15 +652,15 @@ impl RustViewApp {
                 });
             });
             ui.add_space(16.0);
-            ui.heading("Bu bilgisayara erişim");
+            ui.heading("Allow remote access");
             ui.label(
-                RichText::new("Kimlik ve geçici parolayı yalnızca güvendiğiniz kişiyle paylaşın.")
+                RichText::new("Share the ID and temporary password only with someone you trust.")
                     .color(MUTED),
             );
             ui.add_space(22.0);
 
             ui.label(
-                RichText::new("RUSTVIEW KİMLİĞİNİZ")
+                RichText::new("YOUR RUSTVIEW ID")
                     .small()
                     .strong()
                     .color(MUTED),
@@ -660,27 +668,32 @@ impl RustViewApp {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(&device_id).monospace().strong().size(25.0));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.small_button("Kopyala").clicked() {
+                    if ui.small_button("Copy").clicked() {
                         ui.ctx().copy_text(device_id.clone());
                     }
                 });
             });
             ui.add_space(18.0);
 
-            ui.label(RichText::new("GEÇİCİ PAROLA").small().strong().color(MUTED));
             ui.label(
-                RichText::new(password.unwrap_or("Kullanılamıyor"))
+                RichText::new("TEMPORARY PASSWORD")
+                    .small()
+                    .strong()
+                    .color(MUTED),
+            );
+            ui.label(
+                RichText::new(password.unwrap_or("Unavailable"))
                     .monospace()
                     .strong()
                     .size(23.0)
                     .color(TEXT),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.small_button("Yenile").clicked() {
+                if ui.small_button("Generate new").clicked() {
                     rotate = true;
                 }
                 if ui
-                    .add_enabled(password.is_some(), Button::new("Kopyala").small())
+                    .add_enabled(password.is_some(), Button::new("Copy").small())
                     .clicked()
                     && let Some(password) = password
                 {
@@ -695,7 +708,7 @@ impl RustViewApp {
                 .show(ui, |ui| {
                     ui.label(
                         RichText::new(
-                            "Parola yalnız bu uygulama çalıştırması için geçerlidir. Her gelen bağlantıyı ayrıca siz onaylarsınız.",
+                            "This password is valid only while the app is running. You must also approve every incoming connection.",
                         )
                         .small()
                         .color(ACCENT_DARK),
@@ -711,15 +724,15 @@ impl RustViewApp {
         let mut continue_to_password = false;
         surface(ui, width, |ui| {
             ui.set_min_height(370.0);
-            section_badge(ui, "UZAK CİHAZ", Color32::from_rgb(245, 158, 66));
+            section_badge(ui, "REMOTE DEVICE", ACCENT);
             ui.add_space(16.0);
-            ui.heading("Başka bir cihaza bağlan");
+            ui.heading("Connect to a remote device");
             ui.label(
-                RichText::new("Karşı taraftan aldığınız RustView kimliğini girin.").color(MUTED),
+                RichText::new("Enter the RustView ID shown on the remote device.").color(MUTED),
             );
             ui.add_space(22.0);
             ui.label(
-                RichText::new("UZAK RUSTVIEW KİMLİĞİ")
+                RichText::new("REMOTE DEVICE ID")
                     .small()
                     .strong()
                     .color(MUTED),
@@ -727,15 +740,18 @@ impl RustViewApp {
             let response = ui.add(
                 TextEdit::singleline(&mut self.remote_id_input)
                     .desired_width(f32::INFINITY)
-                    .hint_text("Örn. 123 456 789"),
+                    .hint_text("e.g. 123 456 789"),
             );
             if response.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter)) {
                 continue_to_password = true;
             }
             ui.add_space(10.0);
-            ui.checkbox(&mut self.request_control, "Klavye ve fare kontrolü iste");
+            ui.checkbox(
+                &mut self.request_control,
+                "Request keyboard and mouse control",
+            );
             ui.label(
-                RichText::new("Kontrol kapalıyken yalnızca uzak ekranı görürsünüz.")
+                RichText::new("When control is off, you can only view the remote screen.")
                     .small()
                     .color(MUTED),
             );
@@ -743,9 +759,9 @@ impl RustViewApp {
             if ui
                 .add_enabled(
                     !self.remote_id_input.trim().is_empty(),
-                    Button::new(RichText::new("Devam et").strong().color(Color32::WHITE))
+                    Button::new(RichText::new("Connect").strong().color(Color32::WHITE))
                         .fill(ACCENT)
-                        .min_size(Vec2::new(ui.available_width(), 42.0)),
+                        .min_size(Vec2::new(ui.available_width(), 48.0)),
                 )
                 .clicked()
             {
@@ -753,7 +769,7 @@ impl RustViewApp {
             }
             ui.add_space(14.0);
             ui.label(
-                RichText::new("Parolayı girdikten sonra karşı bilgisayarda açık onay gerekebilir.")
+                RichText::new("Password will be requested next.")
                     .small()
                     .color(MUTED),
             );
@@ -764,17 +780,17 @@ impl RustViewApp {
     }
 
     fn settings_page(&mut self, ui: &mut egui::Ui) {
-        ui.heading(RichText::new("Ayarlar").size(27.0));
+        ui.heading(RichText::new("Settings").size(27.0));
         ui.label(
-            RichText::new("Relay bağlantısını ve yerel erişim durumunu yönetin.").color(MUTED),
+            RichText::new("Manage the relay connection and local access status.").color(MUTED),
         );
         ui.add_space(22.0);
 
         surface(ui, ui.available_width().min(720.0), |ui| {
-            ui.heading("Relay sunucusu");
-            ui.label(RichText::new("Host:port biçiminde RustView relay adresi.").color(MUTED));
+            ui.heading("Relay server");
+            ui.label(RichText::new("RustView relay address in host:port format.").color(MUTED));
             ui.add_space(14.0);
-            ui.label(RichText::new("RELAY ADRESİ").small().strong().color(MUTED));
+            ui.label(RichText::new("RELAY ADDRESS").small().strong().color(MUTED));
             ui.add(
                 TextEdit::singleline(&mut self.relay_draft)
                     .char_limit(MAX_RELAY_ADDRESS_LEN)
@@ -784,16 +800,14 @@ impl RustViewApp {
             ui.horizontal(|ui| {
                 if ui
                     .add(
-                        Button::new(
-                            RichText::new("Kaydet ve yeniden bağlan").color(Color32::WHITE),
-                        )
-                        .fill(ACCENT),
+                        Button::new(RichText::new("Save and reconnect").color(Color32::WHITE))
+                            .fill(ACCENT),
                     )
                     .clicked()
                 {
                     self.apply_relay_settings();
                 }
-                if ui.button("Bağlantıyı yenile").clicked() {
+                if ui.button("Reconnect").clicked() {
                     self.restart_host_after(HOST_RESTART_AFTER_REFRESH);
                 }
             });
@@ -801,7 +815,7 @@ impl RustViewApp {
             ui.separator();
             ui.add_space(14.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Yerel erişim durumu").strong());
+                ui.label(RichText::new("Local access status").strong());
                 ui.label(RichText::new("●").color(if self.host_worker.is_some() {
                     SUCCESS
                 } else {
@@ -826,16 +840,16 @@ impl RustViewApp {
                     ui.label(RichText::new("●").color(SUCCESS));
                     ui.label(RichText::new(&self.viewer_status).strong());
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button("Bağlantıyı kapat").clicked() {
+                        if ui.button("Disconnect").clicked() {
                             self.stop_viewer(true);
-                            self.notice = Some("Uzak oturum kapatıldı.".to_owned());
+                            self.notice = Some("The remote session was closed.".to_owned());
                         }
                         section_badge(
                             ui,
                             if self.control_enabled {
-                                "KONTROL AÇIK"
+                                "CONTROL ENABLED"
                             } else {
-                                "YALNIZ GÖRÜNTÜ"
+                                "VIEW ONLY"
                             },
                             if self.control_enabled { ACCENT } else { MUTED },
                         );
@@ -860,7 +874,7 @@ impl RustViewApp {
                             ui.add_space(10.0);
                             ui.label(RichText::new(&self.viewer_status).strong());
                             ui.label(
-                                RichText::new("Karşı tarafın onayı bekleniyor olabilir.")
+                                RichText::new("The remote user may still need to approve access.")
                                     .color(Color32::from_rgb(184, 190, 200)),
                             );
                         });
@@ -875,7 +889,7 @@ impl RustViewApp {
         }
         let mut open = self.password_dialog_open;
         let mut connect = false;
-        egui::Window::new("Erişim parolası")
+        egui::Window::new("Access password")
             .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
             .collapsible(false)
             .resizable(false)
@@ -889,7 +903,7 @@ impl RustViewApp {
                     .inner_margin(Margin::same(16)),
             )
             .show(ctx, |ui| {
-                ui.label(RichText::new("Uzak cihaz").small().strong().color(MUTED));
+                ui.label(RichText::new("Remote device").small().strong().color(MUTED));
                 ui.label(
                     RichText::new(self.remote_id_input.trim())
                         .monospace()
@@ -898,7 +912,7 @@ impl RustViewApp {
                 );
                 ui.add_space(12.0);
                 ui.label(
-                    RichText::new("16 KARAKTERLİ GEÇİCİ PAROLA")
+                    RichText::new("16-CHARACTER TEMPORARY PASSWORD")
                         .small()
                         .color(MUTED),
                 );
@@ -907,26 +921,29 @@ impl RustViewApp {
                         .password(true)
                         .char_limit(32)
                         .desired_width(f32::INFINITY)
-                        .hint_text("Erişim parolası"),
+                        .hint_text("Access password"),
                 );
                 if response.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter)) {
                     connect = true;
                 }
                 ui.label(
-                    RichText::new("Parola şifreli kanal kurulurken doğrulanır.")
-                        .small()
-                        .color(MUTED),
+                    RichText::new(
+                        "The password is verified while the encrypted channel is established.",
+                    )
+                    .small()
+                    .color(MUTED),
                 );
                 ui.add_space(14.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Vazgeç").clicked() {
+                    if ui.button("Cancel").clicked() {
                         self.remote_password_input.clear();
                         self.password_dialog_open = false;
                     }
                     if ui
                         .add_enabled(
                             !self.remote_password_input.trim().is_empty(),
-                            Button::new(RichText::new("Bağlan").color(Color32::WHITE)).fill(ACCENT),
+                            Button::new(RichText::new("Connect").color(Color32::WHITE))
+                                .fill(ACCENT),
                         )
                         .clicked()
                     {
@@ -951,7 +968,7 @@ impl RustViewApp {
         }
         let mut approve = false;
         let mut deny = false;
-        egui::Window::new("Gelen bağlantı isteği")
+        egui::Window::new("Incoming connection request")
             .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
             .collapsible(false)
             .resizable(false)
@@ -964,24 +981,26 @@ impl RustViewApp {
                     .inner_margin(Margin::same(16)),
             )
             .show(ctx, |ui| {
-                section_badge(ui, "YEREL ONAY GEREKLİ", ACCENT);
+                section_badge(ui, "LOCAL APPROVAL REQUIRED", ACCENT);
                 ui.add_space(12.0);
-                ui.heading("Ekranınızı paylaşmak istiyor");
+                ui.heading("Wants to view your screen");
                 ui.label(RichText::new(&peer_name).strong().size(20.0).color(TEXT));
                 ui.label(
-                    RichText::new("Yalnızca bu kişiyi tanıyor ve bekliyorsanız izin verin.")
-                        .color(MUTED),
+                    RichText::new(
+                        "Allow access only if you recognize this person and expect the request.",
+                    )
+                    .color(MUTED),
                 );
                 ui.add_space(14.0);
                 ui.add_enabled_ui(requested_control, |ui| {
                     ui.checkbox(
                         &mut self.grant_control,
-                        "Klavye ve fare kontrolüne ayrıca izin ver",
+                        "Also allow keyboard and mouse control",
                     );
                 });
                 if !requested_control {
                     ui.label(
-                        RichText::new("Bu istek yalnızca ekran görüntüleme izni istiyor.")
+                        RichText::new("This request asks for view-only access.")
                             .small()
                             .color(MUTED),
                     );
@@ -990,7 +1009,7 @@ impl RustViewApp {
                 ui.horizontal(|ui| {
                     if ui
                         .add(
-                            Button::new(RichText::new("Reddet").color(DANGER))
+                            Button::new(RichText::new("Deny").color(DANGER))
                                 .fill(Color32::from_rgb(251, 231, 232)),
                         )
                         .clicked()
@@ -998,10 +1017,7 @@ impl RustViewApp {
                         deny = true;
                     }
                     if ui
-                        .add(
-                            Button::new(RichText::new("İzin ver").color(Color32::WHITE))
-                                .fill(ACCENT),
-                        )
+                        .add(Button::new(RichText::new("Allow").color(Color32::WHITE)).fill(ACCENT))
                         .clicked()
                     {
                         approve = true;
@@ -1013,14 +1029,14 @@ impl RustViewApp {
             self.send_host(Command::Deny);
             self.pending_peer = None;
             self.grant_control = false;
-            self.host_status = "Bağlantı reddediliyor".to_owned();
+            self.host_status = "Denying connection".to_owned();
         } else if approve {
             self.send_host(Command::Approve {
                 remote_control: self.grant_control && requested_control,
             });
             self.pending_peer = None;
             self.grant_control = false;
-            self.host_status = "Güvenli oturum başlatılıyor".to_owned();
+            self.host_status = "Starting secure session".to_owned();
         }
     }
 
@@ -1218,8 +1234,17 @@ fn surface(ui: &mut egui::Ui, width: f32, add_contents: impl FnOnce(&mut egui::U
         .corner_radius(CornerRadius::same(12))
         .inner_margin(Margin::same(20))
         .show(ui, |ui| {
-            ui.set_width((width - 42.0).max(120.0));
-            add_contents(ui);
+            let content_width = (width - 42.0).max(120.0);
+            // A card can be hosted by a horizontal two-column layout. Give the card its own
+            // top-down child UI so that the parent's direction never leaks into card content.
+            ui.allocate_ui_with_layout(
+                Vec2::new(content_width, 0.0),
+                Layout::top_down(Align::Min),
+                |ui| {
+                    ui.set_width(content_width);
+                    add_contents(ui);
+                },
+            );
         });
 }
 
@@ -1254,7 +1279,7 @@ fn message_banner(ui: &mut egui::Ui, message: &str, color: Color32, dismiss: imp
             ui.horizontal(|ui| {
                 ui.label(RichText::new(message).color(TEXT));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    dismissed = ui.small_button("Kapat").clicked();
+                    dismissed = ui.small_button("Dismiss").clicked();
                 });
             });
         });
@@ -1431,6 +1456,28 @@ mod tests {
         assert_eq!(hid_usage(Key::Insert), None);
         assert_eq!(hid_usage(Key::F12), Some(0x45));
         assert_eq!(hid_usage(Key::Semicolon), Some(0x33));
+    }
+
+    #[test]
+    fn surface_keeps_card_content_vertical_inside_horizontal_parent() {
+        let mut first_rect = None;
+        let mut second_rect = None;
+
+        egui::__run_test_ui(|ui| {
+            ui.horizontal(|ui| {
+                surface(ui, 320.0, |ui| {
+                    first_rect = Some(ui.label("First row").rect);
+                    second_rect = Some(ui.label("Second row").rect);
+                });
+            });
+        });
+
+        let first_rect = first_rect.expect("first label should be rendered");
+        let second_rect = second_rect.expect("second label should be rendered");
+        assert!(
+            second_rect.top() >= first_rect.bottom(),
+            "surface content must flow downward: first={first_rect:?}, second={second_rect:?}"
+        );
     }
 
     #[test]

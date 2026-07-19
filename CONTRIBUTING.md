@@ -1,22 +1,24 @@
-# RustView'e katkı
+# Contributing to RustView
 
-RustView açık kaynak bir uzak masaüstü projesidir. Kod, test, belge, tasarım,
-erişilebilirlik ve platform doğrulama katkıları memnuniyetle kabul edilir.
+RustView is an open-source remote desktop project. Contributions involving code,
+tests, documentation, design, accessibility, and platform validation are welcome.
 
-## Başlamadan önce
+## Before you begin
 
-- Güvenlik açığını public issue veya pull request ile açıklamayın;
-  [SECURITY.md](SECURITY.md) akışını kullanın.
-- Büyük bir protokol, kriptografi, dependency veya platform backend değişikliği için
-  önce kısa bir tasarım issue'su açın.
-- Mevcut [mimari](docs/ARCHITECTURE.md), [güvenlik modeli](docs/SECURITY.md) ve
-  [platform sınırlarını](docs/PLATFORM_SUPPORT.md) okuyun.
-- Katkınızın MIT Lisansı altında dağıtılacağını kabul etmiş olursunuz.
+- Do not disclose vulnerabilities in a public issue or pull request; use the
+  process in [SECURITY.md](SECURITY.md).
+- Open a short design issue before making a major change to the protocol,
+  cryptography, dependencies, or a platform backend.
+- Read the current [architecture](docs/ARCHITECTURE.md),
+  [security model](docs/SECURITY.md), and
+  [platform limitations](docs/PLATFORM_SUPPORT.md).
+- By contributing, you agree that your contribution will be distributed under the
+  MIT License.
 
-## Geliştirme ortamı
+## Development environment
 
-Gereken Rust sürümü workspace `rust-version` alanında belirtilir; şu anda Rust
-1.92'dir. Toolchain ve bileşenleri kurduktan sonra:
+The required Rust version is defined in the workspace `rust-version` field and is
+currently Rust 1.92. After installing the toolchain and components, run:
 
 ```bash
 rustup component add rustfmt clippy
@@ -24,25 +26,25 @@ cargo build --workspace
 cargo test --workspace
 ```
 
-Linux native bağımlılıkları için [platform belgesine](docs/PLATFORM_SUPPORT.md)
-bakın.
+See the [platform documentation](docs/PLATFORM_SUPPORT.md) for native Linux
+dependencies.
 
-Relay ve masaüstü uygulamasını ayrı terminallerde çalıştırabilirsiniz:
+You can run the relay and desktop application in separate terminals:
 
 ```bash
 cargo run -p rustview-relay -- --listen 127.0.0.1:21116
 cargo run -p rustview-desktop
 ```
 
-## Değişiklik akışı
+## Change workflow
 
-1. Küçük ve tek amaca odaklanan bir branch oluşturun.
-2. Davranış değişikliğini testle birlikte ekleyin.
-3. Kullanıcıya veya protokole görünen değişiklikte ilgili belgeyi güncelleyin.
-4. Aşağıdaki kalite kontrollerini yerelde çalıştırın.
-5. Pull request açıklamasında kapsamı, riskleri ve doğruladığınız platformları yazın.
+1. Create a small branch focused on a single purpose.
+2. Add tests alongside behavioral changes.
+3. Update the relevant documentation for user-visible or protocol-visible changes.
+4. Run the quality checks below locally.
+5. Describe the scope, risks, and validated platforms in the pull request.
 
-Zorunlu kontroller:
+Required checks:
 
 ```bash
 cargo fmt --all -- --check
@@ -51,79 +53,86 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-CI macOS, Windows ve Ubuntu'da aynı temel kontrolleri çalıştırır. Bir platformda
-compile başarısı runtime desteği kanıtlamaz; platforma özel değişiklik için gerçek
-cihaz sonucu ekleyin.
+CI runs the same core checks on macOS, Windows, and Ubuntu. Successful compilation
+on a platform does not prove runtime support; include real-device results for
+platform-specific changes.
 
-## Mimari kurallar
+## Architecture rules
 
-- UI ve platform API'leri `rustview-core` içine taşınmamalıdır.
-- Relay medya veya input payload'unu decode etmemelidir.
-- Network input allocation öncesi boyut sınırıyla doğrulanmalıdır.
-- Queue ve connection sayıları bounded olmalıdır.
-- Yerel host onayı atlanmamalı; varsayılan izin view-only kalmalıdır.
-- Yeni permission/capability protokolde açık ve sürümlü olmalıdır.
-- `unsafe` workspace genelinde yasaktır. OS FFI nedeniyle gerçekten gerekirse önce
-  mimari görüşme ve dar kapsamlı policy değişikliği gerekir.
-- Kütüphane crate'lerinde `thiserror`, binary sınırında context için `anyhow`
-  yaklaşımı korunmalıdır.
-- Loglarda davet secret'ı, key material, ekran veya tuş içeriği bulunmamalıdır.
+- UI and platform APIs must not be moved into `rustview-core`.
+- The relay must not decode media or input payloads.
+- Network input must be length-checked before allocation.
+- Queue and connection counts must be bounded.
+- Local host approval must not be bypassed; the default permission must remain
+  view-only.
+- New permissions and capabilities must be explicit and versioned in the protocol.
+- `unsafe` is forbidden throughout the workspace. If OS FFI genuinely requires
+  it, discuss the architecture first and make only a narrowly scoped policy change.
+- Preserve the convention of using `thiserror` in library crates and `anyhow` for
+  context at binary boundaries.
+- Logs must not contain invitation secrets, key material, screen contents, or
+  keystroke contents.
 
-## Protokol ve kriptografi değişiklikleri
+## Protocol and cryptography changes
 
-Aşağıdaki alanlarda “küçük refactor” kabul edilmez; tasarım ve test vector gerekir:
+Changes in the following areas are not considered “small refactors”; they require a
+design and test vectors:
 
-- `RV1` invitation biçimi veya entropy
-- Noise pattern/cipher suite/PSK yerleşimi
-- Wire framing, maksimum boyutlar veya message numbering
-- Permission state machine
-- Relay pairing/routing davranışı
-- QUIC, iroh veya başka transport'a geçiş
+- The `RV1` invitation format or entropy
+- The Noise pattern, cipher suite, or PSK placement
+- Wire framing, maximum sizes, or message numbering
+- The permission state machine
+- Relay pairing or routing behavior
+- Migration to QUIC, iroh, or another transport
 
-Kriptografik primitive veya PAKE sıfırdan uygulanmamalıdır. Değişiklik açıklamasında
-tehdit modeli etkisini, backward compatibility kararını, yanlış/replay/mutation testini
-ve secret yaşam döngüsünü belirtin.
+Do not implement cryptographic primitives or PAKEs from scratch. A change proposal
+must describe the threat-model impact, backward-compatibility decision, incorrect
+credential/replay/mutation tests, and secret lifecycle.
 
-## Test beklentileri
+## Testing expectations
 
-Değişikliğe göre aşağıdakilerden uygun olanları ekleyin:
+Add the applicable tests for your change:
 
-- Unit test: parse, validation, state transition ve hata yolları
-- Integration test: parçalı TCP read/write, relay pair ve disconnect
-- Negative security test: yanlış secret, bozuk ciphertext, replay, limit aşımı
-- Property/fuzz test: wire parser ve allocation sınırları
-- UI/manual test: izin reddi, view-only fallback, host disconnect
-- Platform testi: OS sürümü, mimari, display server/compositor, DPI ve klavye düzeni
+- Unit tests: parsing, validation, state transitions, and error paths
+- Integration tests: fragmented TCP reads/writes, relay pairing, and disconnects
+- Negative security tests: incorrect secrets, malformed ciphertext, replay, and
+  limit violations
+- Property/fuzz tests: wire parsers and allocation bounds
+- UI/manual tests: permission denial, view-only fallback, and host disconnect
+- Platform tests: OS version, architecture, display server/compositor, DPI, and
+  keyboard layout
 
-Remote input testlerinin gerçek fare/klavye hareketi üretebileceğini unutmayın.
-Testi izole ortamda çalıştırın ve test bitiminde input state'inin temizlendiğini
-doğrulayın.
+Remote-input tests may generate real mouse and keyboard actions. Run them in an
+isolated environment and verify that input state is released when the test ends.
 
-## Dependency politikası
+## Dependency policy
 
-Yeni bağımlılık eklerken:
+When adding a dependency:
 
-- Bakım durumu, audit geçmişi, unsafe kullanımı ve transitive dependency sayısını
-  inceleyin.
-- Lisansın MIT proje dağıtımıyla uyumlu olduğunu doğrulayın.
-- GPL codec veya sistem FFmpeg bağımlılığını varsayılan feature'a eklemeyin.
-- Platform build ve paket boyutu etkisini açıklayın.
-- Mümkünse default feature'ları kapatıp yalnız gereken feature'ları seçin.
+- Review its maintenance status, audit history, use of `unsafe`, and transitive
+  dependency count.
+- Confirm that its license is compatible with distribution of this MIT-licensed
+  project.
+- Do not add a GPL codec or system FFmpeg dependency to a default feature.
+- Explain the effect on platform builds and package size.
+- When practical, disable default features and select only those that are needed.
 
-## Belge ve dil
+## Documentation and language
 
-Ana kullanıcı belgelerinde Türkçe önceliklidir. Açık, kısa cümleler ve doğrulanabilir
-iddialar kullanın. İngilizce belge/çeviri katkıları da kabul edilir; ancak güvenlik
-sınırlarını daha güçlü gösterecek biçimde çevirmeyin. “E2EE”, “destekleniyor” veya
-“production-ready” gibi iddialar test ve threat model ile uyumlu olmalıdır.
+English is the primary language for the application UI, source-facing text, and
+repository documentation. Use clear, concise sentences and verifiable claims.
+Translations are welcome as separate localized resources, but they must preserve
+all security boundaries and must not strengthen claims beyond the English source.
+Terms such as “E2EE,” “supported,” and “production-ready” must remain consistent
+with the tests and threat model.
 
-## Pull request kontrol listesi
+## Pull request checklist
 
-- [ ] Değişiklik tek bir amacı çözüyor.
-- [ ] Testler eklendi/güncellendi ve yerelde geçti.
-- [ ] fmt, check ve clippy geçti.
-- [ ] Protokol veya kullanıcı davranışı değiştiyse belgeler güncellendi.
-- [ ] Yeni loglar hassas veri içermiyor.
-- [ ] Yeni allocation, queue ve connection'lar bounded.
-- [ ] Platform etkisi ve manuel test sonucu açıklandı.
-- [ ] Güvenlik/izin varsayılanları zayıflatılmadı.
+- [ ] The change addresses one focused purpose.
+- [ ] Tests were added or updated and pass locally.
+- [ ] Formatting, checks, and Clippy pass.
+- [ ] Documentation was updated if protocol or user behavior changed.
+- [ ] New logs contain no sensitive data.
+- [ ] New allocations, queues, and connections are bounded.
+- [ ] Platform impact and manual test results are documented.
+- [ ] Security and permission defaults were not weakened.

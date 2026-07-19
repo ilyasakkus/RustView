@@ -1,125 +1,133 @@
-# RustView mimarisi
+# RustView architecture
 
-Bu belge RustView'in ilk MVP mimarisini, güven sınırlarını ve gelecekteki ağ
-evrimini açıklar. Mevcut hedef; anlaşılır, test edilebilir ve güvenli varsayımları
-olan küçük bir dikey dilim üretmektir. Bu belge üretime hazır özellik taahhüdü
-değildir.
+This document describes RustView's initial MVP architecture, trust boundaries, and
+planned network evolution. The current goal is a small vertical slice that is easy
+to understand and test and that has secure defaults. This document is not a
+commitment to production-ready functionality.
 
-## Tasarım hedefleri
+## Design goals
 
-- macOS, Windows ve Linux'ta aynı Rust codebase'ini kullanmak
-- Relay operatörünün ekran ve giriş içeriğini okuyamaması
-- Host'un açık yerel onayı olmadan uzaktan giriş işlenmemesi
-- Ağ, oturum, platform ve UI katmanlarını birbirinden ayırmak
-- Yavaş alıcının sınırsız bellek büyümesine yol açmaması
-- İleride TCP relay'den doğrudan QUIC bağlantısına geçerken uygulama protokolünü
-  mümkün olduğunca korumak
+- Use the same Rust codebase on macOS, Windows, and Linux
+- Prevent the relay operator from reading screen or input content
+- Process no remote input without explicit local approval by the host
+- Separate the network, session, platform, and UI layers
+- Prevent a slow receiver from causing unbounded memory growth
+- Preserve as much of the application protocol as possible when moving from the
+  TCP relay to direct QUIC connections in the future
 
-İlk MVP'nin performans hedefi 720p çözünürlükte 5-10 FPS JPEG'dir. Düşük gecikmeli,
-donanım hızlandırmalı ve çoklu ekranlı tam bir uzak masaüstü ürünü bu aşamanın
-dışındadır.
+The initial MVP performance target is 720p JPEG at 5–10 FPS. A complete,
+low-latency, hardware-accelerated, multi-display remote desktop product is outside
+this phase's scope.
 
-## Workspace sınırları
+## Workspace boundaries
 
 ```text
 apps/rustview-desktop/
-  UI, kullanıcı etkileşimi, capture/render döngüsü ve oturum orkestrasyonu
+  UI, user interaction, capture/render loop, and session orchestration
 
 crates/rustview-core/
-  Kimlik/parola türetimi, wire mesajları, bounded framing, Noise oturumu, ortak tipler
+  Identity/password derivation, wire messages, bounded framing, Noise session, and shared types
 
 services/rustview-relay/
-  Register/Claim rendezvous ve eşleşen TCP akışlarının kör iletimi
+  Register/Claim rendezvous and blind forwarding of paired TCP streams
 ```
 
-Bağımlılık yönü masaüstü ve relay binary'lerinden `rustview-core`'a doğrudur.
-Core UI toolkit'ini bilmez; relay ekran yakalama veya giriş koduna bağımlı değildir.
-Platforma özel davranışlar masaüstü uygulamasının sınırında tutulur.
+Dependencies point from the desktop and relay binaries toward `rustview-core`.
+Core has no knowledge of the UI toolkit, and the relay has no dependency on screen
+capture or input code. Platform-specific behavior remains at the desktop
+application boundary.
 
-Workspace, Rust 2024 edition ve Rust 1.92 kullanır. `unsafe_code = "forbid"`
-workspace genelinde geçerlidir.
+The workspace uses Rust 2024 edition and Rust 1.92. `unsafe_code = "forbid"`
+applies throughout the workspace.
 
-## Bileşenler
+## Components
 
-### Masaüstü uygulaması
+### Desktop application
 
-`rustview-desktop` aynı binary içinde iki rolü destekler:
+`rustview-desktop` supports two roles in the same binary:
 
-- **Host:** ekranı yakalar, JPEG kareleri üretir, bağlantı isteğini yerel kullanıcıya
-  gösterir ve onaylanan giriş olaylarını uygular.
-- **Controller:** 9 haneli cihaz kimliği ve geçici erişim parolasıyla bağlanır,
-  kareleri gösterir ve izin verildiğinde yerel fare/klavye olaylarını host'a gönderir.
+- **Host:** Captures the screen, produces JPEG frames, displays the connection
+  request to the local user, and applies approved input events.
+- **Controller:** Connects using the nine-digit device ID and temporary access
+  password, displays frames, and sends local mouse/keyboard events to the host when
+  permission has been granted.
 
-UI `eframe/egui`, ekran yakalama `xcap`, JPEG işleme `image`, giriş üretimi ise
-desteklenen platformlarda `enigo` ile yapılır. Bunlar MVP adapter'larıdır; platform
-yetenekleri her zaman çalışma anında kontrol edilir.
+The UI uses `eframe/egui`, screen capture uses `xcap`, JPEG processing uses `image`,
+and input generation uses `enigo` on supported platforms. These are MVP adapters;
+platform capabilities are always checked at runtime.
 
 ### Core
 
-`rustview-core` aşağıdaki sorumlulukları taşır:
+`rustview-core` is responsible for:
 
-- Kalıcı herkese açık cihaz kimliği, geçici erişim parolası ve domain-separated
-  relay route/Noise PSK türetimi
-- UI'dan kaldırılmış iç/legacy `Invitation` (`RV1`) primitive'i ve hassas secret
-  yaşam döngüsü
-- Relay kontrol mesajları (`Register`, `Claim`, `Ping` ve yanıtları)
-- Boyut sınırı olan binary framing ve `postcard` serileştirme
-- Noise el sıkışması ve transport mesajlarının şifrelenmesi
-- Oturum mesajları, izinler, frame metadata'sı ve protokol sürümü doğrulaması
-- UI'dan bağımsız durum ve hata tipleri
+- Persistent public device identity, temporary access passwords, and
+  domain-separated relay-route/Noise-PSK derivation
+- The internal/legacy `Invitation` (`RV1`) primitive, removed from the UI, and the
+  lifecycle of its sensitive secret
+- Relay control messages (`Register`, `Claim`, `Ping`, and responses)
+- Size-bounded binary framing and `postcard` serialization
+- Noise handshake and transport-message encryption
+- Session messages, permissions, frame metadata, and protocol-version validation
+- UI-independent state and error types
 
-### Kör relay
+### Blind relay
 
-`rustview-relay` bir medya sunucusu değildir. İki görevi vardır:
+`rustview-relay` is not a media server. It has two responsibilities:
 
-1. Host'un cihaz kimliği ve geçici paroladan türetilen route değeriyle yaptığı
-   `Register` isteğini kısa süre bekletmek.
-2. Controller'ın aynı route için yaptığı `Claim` isteğini eşleştirip iki TCP
-   akışı arasında byte kopyalamak.
+1. Hold a host's `Register` request for a short time under the route derived from
+   its device ID and temporary password.
+2. Match a controller's `Claim` request for the same route, then copy bytes between
+   the two TCP streams.
 
-Eşleşmeden sonra relay uygulama mesajlarını parse etmez ve Noise anahtarına sahip
-değildir. Relay'in görebildiği metadata ve bu tasarımın sınırları
-[SECURITY.md](SECURITY.md) içinde açıklanır.
+After pairing, the relay does not parse application messages and does not possess
+the Noise key. The metadata visible to the relay and the limitations of this design
+are documented in [SECURITY.md](SECURITY.md).
 
-## Cihaz kimliği, geçici parola ve bağlantı akışı
+## Device ID, temporary password, and connection flow
 
-Desktop UI iki ayrı kullanıcı girdisi kullanır:
+The desktop UI uses two distinct user values:
 
-- `DeviceId`: Kurulum başına bir kez üretilen, sıfır olmayan ve başında sıfır
-  bulunabilen 9 haneli herkese açık kimliktir. Yalnız bu değer kullanıcı config
-  dizinindeki `device-id` dosyasına kalıcı yazılır.
-- `AccessPassword`: Her uygulama açılışında OS rastgelelik kaynağından üretilen,
-  karışıklık yaratmayan 32 sembollü alfabeden 16 karakterlik/80-bit geçici
-  paroladır. Diske yazılmaz, `Debug` çıktısında redakte edilir ve UI'dan
-  yenilenebilir.
+- `DeviceId`: A nonzero, nine-digit public identifier generated once per
+  installation. Leading zeros are allowed. Only this value is persisted in the
+  `device-id` file in the user's configuration directory.
+- `AccessPassword`: A temporary 16-character/80-bit password generated from the OS
+  randomness source on every application launch using an unambiguous 32-symbol
+  alphabet. It is never written to disk, is redacted from `Debug` output, and can
+  be regenerated from the UI.
 
-Desktop, cihaz kimliğiyle secret olmayan kayıtlı relay adresini platformun kullanıcı
-config dizininde tutar; `RUSTVIEW_CONFIG_DIR` verilirse `device-id` ve
-`relay-address` bu dizinin altında oluşturulur. Override geçici parolayı
-kalıcılaştırmaz. Host ve controller aynı relay adresini kullanmalıdır; relay adresi
-değiştirildiğinde ayar kalıcı yazılır ve host kaydı yeniden başlatılır.
+The desktop stores the public device ID and non-secret saved relay address in the
+platform's user configuration directory. When `RUSTVIEW_CONFIG_DIR` is set,
+`device-id` and `relay-address` are created in that directory. The override does not
+persist the temporary password. Host and controller must use the same relay
+address. Changing the relay address persists the setting and restarts host
+registration.
 
-Normalize edilmiş kimlik ve parola iki ayrı BLAKE2s domain'iyle işlenir:
+The normalized identity and password are processed under two separate BLAKE2s
+domains:
 
-1. `RustView password-protected route id` domain'i 10 baytlık relay route'unu,
-2. `RustView pairing secret` domain'i 32 baytlık Noise PSK'sını üretir.
+1. The `RustView password-protected route id` domain produces the 10-byte relay
+   route.
+2. The `RustView pairing secret` domain produces the 32-byte Noise PSK.
 
-Route, PSK'nın ilk 10 baytı değildir; iki çıktı domain separation ile bağımsızdır.
-Desktop erişim yolu yalnız cihaz kimliğinden türetilen route'u kullanmaz. Böylece
-herkese açık 9 haneli kimliği bilmek relay route'unu hesaplamak veya claim etmek için
-yeterli olmaz. Relay'e `Register`/`Claim` içinde yalnız türetilmiş route gider; cihaz
-kimliği, geçici parola ve PSK düz metin gönderilmez.
+The route is not the first 10 bytes of the PSK; domain separation makes the outputs
+independent. The desktop access path does not use a route derived from the device
+ID alone. Consequently, knowing the public nine-digit ID is insufficient to
+calculate or claim the relay route. Only the derived route is sent to the relay in
+`Register`/`Claim`; the device ID, temporary password, and PSK are not sent in
+plaintext.
 
-Core'daki `Invitation`, bu iki türetilmiş binary değeri mevcut secure-channel API'sine
-taşıyan iç primitive olmaya devam eder. `RV1.<BASE32_ROUTE>.<BASE64URL_SECRET>` codec'i
-legacy, test ve iç entegrasyon uyumluluğu için korunur; desktop UI artık `RV1` metni
-üretmez, göstermez veya kullanıcıdan yapıştırmasını istemez. Serialize edilmiş bir
-`RV1` yine PSK içerdiğinden gizli capability olarak ele alınmalıdır.
+Core's `Invitation` remains an internal primitive that carries these two derived
+binary values into the existing secure-channel API. The
+`RV1.<BASE32_ROUTE>.<BASE64URL_SECRET>` codec remains available for legacy, test,
+and internal integration compatibility. The desktop UI no longer produces,
+displays, or asks the user to paste `RV1` text. Because a serialized `RV1` still
+contains the PSK, it must be treated as a secret capability.
 
-Geçici parola uygulama çalıştığı sürece birden fazla bağlantı isteği için aynı
-kalabilir; relay'deki her `Register` kaydı yine tek bir `Claim` ile tüketilir ve her
-yeni istek host'ta ayrı açık yerel onay gerektirir. Parolayı UI'dan yenilemek hem
-route'u hem PSK'yı değiştirir ve host kaydını yeniden başlatır.
+The same temporary password can remain valid for multiple connection requests
+during an application run. Each relay `Register` record is still consumed by one
+`Claim`, and every new request requires separate, explicit local approval on the
+host. Regenerating the password in the UI changes both the route and PSK and
+restarts host registration.
 
 ```mermaid
 sequenceDiagram
@@ -127,39 +135,41 @@ sequenceDiagram
     participant R as Blind TCP relay
     participant C as Controller
 
-    H->>H: Kalıcı 9 haneli ID'yi yükle; geçici 80-bit parola üret
-    H->>H: ID + paroladan ayrı domain'lerle route ve 32-byte PSK türet
+    H->>H: Load persistent nine-digit ID; generate temporary 80-bit password
+    H->>H: Derive route and 32-byte PSK from ID + password under separate domains
     H->>R: Register(route)
-    H-->>C: 9 haneli ID ve 16 karakter parolayı güvenli kanaldan paylaş
-    C->>C: ID + paroladan aynı route ve PSK'yı türet
+    H-->>C: Share the nine-digit ID and 16-character password through a secure channel
+    C->>C: Derive the same route and PSK from ID + password
     C->>R: Claim(route)
     R-->>H: Registered / ClaimAccepted
     R-->>C: ClaimAccepted
-    H<<->>C: Noise XXpsk0 handshake; relay yalnız byte iletir
-    C->>H: Oturum ve izin isteği
-    H->>H: Yerel kullanıcı onayı
-    H-->>C: Onaylanan ekran kareleri
-    C-->>H: Yalnız onaylanan giriş olayları
+    H<<->>C: Noise XXpsk0 handshake; relay forwards bytes only
+    C->>H: Session and permission request
+    H->>H: Local user approval
+    H-->>C: Approved screen frames
+    C-->>H: Approved input events only
 ```
 
-Noise suite'i sabittir ve ancak protokol sürümüyle değiştirilir:
+The Noise suite is fixed and changes only with a protocol-version change:
 
 ```text
 Noise_XXpsk0_25519_ChaChaPoly_BLAKE2s
 ```
 
-TCP ve relay taşıma işini, Noise ise iki uç arasındaki gizlilik/bütünlük ve doğru
-cihaz kimliği + geçici paroladan türetilen PSK'ya sahip olmayı doğrulama işini yapar.
-Raw TCP üzerindeki relay TLS'in yerini almaz; içerik güvenliği Noise katmanındadır.
+TCP and the relay provide transport, while Noise provides confidentiality and
+integrity between the endpoints and proves possession of the PSK derived from the
+correct device ID and temporary password. The relay over raw TCP is not a
+replacement for TLS; content security resides in the Noise layer.
 
-Core, static Noise keypair verilmesini destekler. Hedef, cihaz anahtarını güvenli OS
-key store'da kalıcı tutmak ve peer fingerprint'ini pinlemektir. Ancak ilk desktop
-entegrasyonu anahtarı gerçekten saklayıp pinlemiyorsa ilk kullanım kimliği güvenilir
-sayılmaz; yalnız doğru geçici paroladan türetilen PSK'ya sahiplik doğrulanmış olur.
+Core supports supplying a static Noise key pair. The goal is to persist a device
+key in the secure OS key store and pin a peer fingerprint. Until the first desktop
+integration actually stores and pins that key, trust on first use is not
+established; only possession of the PSK derived from the correct temporary password
+is proven.
 
-## Oturum durum makinesi
+## Session state machine
 
-Uygulama akışı aşağıdaki güvenlik durumlarına ayrılır:
+The application flow is divided into the following security states:
 
 ```text
 Idle
@@ -171,98 +181,105 @@ Idle
   -> Idle
 ```
 
-Temel invariant'lar:
+Core invariants:
 
-- Noise kurulmadan uygulama payload'u kabul edilmez.
-- Yerel onay verilmeden frame capture başlamaz ve giriş uygulanmaz.
-- Görüntüleme izni, kontrol izninden ayrıdır.
-- Controller uzaktan izin yükseltemez veya onay UI'sını kapatamaz.
-- Oturum kapanırken basılı tuş ve fare düğmeleri bırakılır.
-- Protokol hatası, zaman aşımı veya yetki ihlali bağlantıyı fail-closed kapatır.
+- Application payloads are rejected until Noise is established.
+- Frame capture does not begin, and input is not applied, before local approval.
+- View permission is separate from control permission.
+- The controller cannot elevate permissions remotely or dismiss the approval UI.
+- Pressed keys and mouse buttons are released when the session closes.
+- Protocol errors, timeouts, and authorization violations close the connection
+  fail-closed.
 
-## Medya yolu ve backpressure
+## Media path and backpressure
 
-MVP yolu şöyledir:
+The MVP path is:
 
 ```text
 xcap BGRA/RGBA frame
-  -> seçili ekran
-  -> 720p sınırına ölçekleme
+  -> selected display
+  -> scale to a 720p limit
   -> JPEG encode
-  -> frame header ve bounded payload
+  -> frame header and bounded payload
   -> Noise transport message
   -> TCP relay
   -> decode
   -> egui texture
 ```
 
-MVP host'ta capture, encode ve send adımlarını aynı worker akışında seri çalıştırır;
-bu nedenle gönderilmeyi bekleyen sınırsız bir frame kuyruğu oluşmaz ve yavaş ağ
-capture FPS'ini doğal olarak düşürür. Viewer'da decode edilen görüntü tek slotta
-tutulur; UI yetişemezse eski slotun üstüne en yeni kare yazılır. JPEG byte boyutu,
-boyut metadata'sı ve decode sonrası allocation sınırlıdır; CPU süresi/fuzzing
-sertleştirmesi sonraki aşamadadır.
+On the MVP host, capture, encode, and send run serially in the same worker. This
+prevents an unbounded queue of frames awaiting transmission, and a slow network
+naturally lowers capture FPS. On the viewer, the decoded image occupies one slot;
+if the UI falls behind, the newest frame replaces the old slot. JPEG byte size,
+dimension metadata, and post-decode allocation are bounded; CPU-time and fuzzing
+hardening remain for a later phase.
 
-Raw TCP paket kaybında tüm akışta head-of-line blocking yaratır. Bu, MVP için kabul
-edilen bir ödünleşimdir. Medya ve input aynı şifreli TCP akışını paylaşır; küçük
-kontrol mesajlarına ayrı öncelik verilmesi QUIC/çoklu-stream aşamasına bırakılmıştır.
+Packet loss under raw TCP creates head-of-line blocking for the entire stream. This
+is an accepted MVP tradeoff. Media and input share the same encrypted TCP stream;
+prioritizing small control messages separately is deferred to the QUIC/multi-stream
+phase.
 
-## Giriş ve koordinatlar
+## Input and coordinates
 
-Fare koordinatları her frame'in seçili display kimliği, fiziksel piksel boyutu ve
-ölçek bilgisiyle birlikte yorumlanır. Controller görüntü alanındaki koordinatı host
-ekranına map eder. Gelen koordinatlar ve key değerleri doğrulanmadan platform API'sine
-verilmez.
+Mouse coordinates are interpreted with each frame's selected-display identity,
+physical pixel size, and scaling information. The controller maps coordinates in
+the displayed image to the host screen. Incoming coordinates and key values are
+validated before reaching the platform API.
 
-Platform adapter'ı kontrol backend'ini yalnız yerel onaydan sonra açmayı dener.
-Wayland/XWayland bilinçli olarak reddedilir; macOS Accessibility izni veya başka bir
-platform kısıtı backend'i engellerse grant view-only olarak gönderilir.
+The platform adapter attempts to enable the control backend only after local
+approval. Wayland/XWayland is deliberately rejected. If macOS Accessibility
+permission or another platform limitation blocks the backend, the grant is sent as
+view-only.
 
-## Relay ölçekleme ve işletim
+## Relay scaling and operations
 
-İlk relay tek süreç ve bellek içi bekleyen-route tablosudur. MVP'de mutlak kontrol
-deadline'ı, bekleyen route TTL'si, kopan host temizliği, tünel idle/write timeout'u
-ile iki saatlik mutlak tünel ömrü ve toplam/IP başına eşzamanlı bağlantı kotası
-vardır. Üretim öncesinde bunların yanında şunlar zorunludur:
+The initial relay is a single process with an in-memory pending-route table. The
+MVP implements an absolute control deadline, pending-route TTL, disconnected-host
+cleanup, tunnel idle/write timeouts, a two-hour absolute tunnel lifetime, and total
+and per-IP concurrent-connection quotas. The following are also required before
+production:
 
-- Dağıtık deployment'la uyumlu IP/route token bucket
-- Eşleşme başına bant genişliği ve mutlak oturum kotası
-- Server-authenticated TLS 1.3 veya QUIC transport
-- Hassas değerleri redakte eden yapılandırılmış loglar
-- Sağlık metriği; ekran veya şifreli payload loglamama
+- An IP/route token bucket compatible with distributed deployment
+- Per-session bandwidth and absolute session quotas
+- Server-authenticated TLS 1.3 or QUIC transport
+- Structured logs that redact sensitive values
+- Health metrics that never log screen or encrypted payload data
 
-Relay yeniden başlatılırsa bekleyen route kayıtları kaybolabilir. Bu bir veri kaybı
-değil; host aynı uygulama çalıştırmasındaki kimlik/parolayla yeniden kayıt olur.
-Kullanıcı parolayı yenilerse route ve PSK birlikte değişir.
+If the relay restarts, pending route registrations may be lost. This is not user
+data loss: the host registers again with the same ID/password during the same
+application run. When the user regenerates the password, the route and PSK change
+together.
 
-## Gelecekteki transport evrimi
+## Future transport evolution
 
-TCP relay ilk çalışan ve hata ayıklaması kolay yoldur. Uzun vadeli ağ katmanı şu
-sırayla evrilir:
+The TCP relay is the first working and easily debuggable path. In the long term,
+the network layer will evolve in this order:
 
-1. Mevcut kör TCP relay ve kimlik/paroladan türetilen Noise PSK'sı
-2. Transport trait'i altında QUIC akışları/datagramları
-3. `iroh` veya eşdeğer kanıtlanmış bir katmanla NAT traversal ve relay fallback
-4. Uygun olduğunda doğrudan peer-to-peer bağlantı; relay yalnız rendezvous/fallback
-5. Video ve input için ayrı öncelik/güvenilirlik politikaları
+1. The current blind TCP relay and Noise PSK derived from the ID/password
+2. QUIC streams/datagrams behind a transport trait
+3. NAT traversal and relay fallback through `iroh` or an equivalent proven layer
+4. Direct peer-to-peer connectivity when practical, with the relay used only for
+   rendezvous/fallback
+5. Separate priority/reliability policies for video and input
 
-ICE, STUN, TURN veya NAT traversal algoritmaları sıfırdan yazılmayacaktır. Iroh/QUIC
-geçişi ayrı bir threat-model incelemesi ve protokol sürümü gerektirir. Mevcut Noise
-credential bağı, yeni transport'un uç kimliğine ve handshake transcript'ine
-bağlanmadan kaldırılmayacaktır.
+ICE, STUN, TURN, and NAT-traversal algorithms will not be implemented from scratch.
+Moving to iroh/QUIC requires a separate threat-model review and protocol version.
+The existing Noise credential binding will not be removed until it is bound to the
+new transport's endpoint identity and handshake transcript.
 
-## Test stratejisi
+## Test strategy
 
-- Cihaz kimliği/geçici parola parse, format, türetim ve invalid input unit testleri
-- İç/legacy `Invitation`/`RV1` codec round-trip ve redaksiyon testleri
-- Framing boyut limiti ve parçalı TCP okuma testleri
-- Noise test vector, yanlış ID/paroladan türetilmiş PSK, replay ve ciphertext
-  mutation testleri
-- Durum makinesi için “onaydan önce input yok” property testleri
-- Yavaş tüketici ve bağlantı kopması altında bounded-memory testleri
-- macOS, Windows ve Ubuntu üzerinde build/check/test CI
-- Gerçek cihazlarda izin, HiDPI, çoklu ekran ve klavye düzeni testleri
-- Wire parser ve JPEG metadata için fuzz testleri
+- Unit tests for device ID/temporary-password parsing, formatting, derivation, and
+  invalid input
+- Internal/legacy `Invitation`/`RV1` codec round-trip and redaction tests
+- Framing size-limit and fragmented-TCP-read tests
+- Noise test vectors and tests for PSKs derived from incorrect IDs/passwords,
+  replay, and ciphertext mutation
+- “No input before consent” property tests for the state machine
+- Bounded-memory tests under slow consumers and disconnects
+- Build/check/test CI on macOS, Windows, and Ubuntu
+- Real-device permission, HiDPI, multi-display, and keyboard-layout tests
+- Fuzz tests for the wire parser and JPEG metadata
 
-CI'da derlenmek, platform davranışının doğrulandığı anlamına gelmez. Release desteği
-yalnız gerçek cihaz smoke testlerinden sonra platform tablosuna eklenir.
+Successful CI compilation does not prove platform behavior. Release support is
+added to the platform table only after real-device smoke testing.

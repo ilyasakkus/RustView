@@ -115,8 +115,8 @@ fn main() -> Result<()> {
 
     let listen = listen_address()?;
     let listener = TcpListener::bind(&listen)
-        .with_context(|| format!("relay {listen} adresini dinleyemedi"))?;
-    info!(address = %listen, "RustView blind relay hazır");
+        .with_context(|| format!("relay failed to listen on {listen}"))?;
+    info!(address = %listen, "RustView blind relay is ready");
 
     let waiting = WaitingHosts::default();
     let total_connections = Arc::new(AtomicUsize::new(0));
@@ -125,7 +125,7 @@ fn main() -> Result<()> {
         let mut stream = match incoming {
             Ok(stream) => stream,
             Err(error) => {
-                warn!(%error, "bağlantı kabul edilemedi");
+                warn!(%error, "failed to accept connection");
                 thread::sleep(ACCEPT_ERROR_BACKOFF);
                 continue;
             }
@@ -135,7 +135,7 @@ fn main() -> Result<()> {
             Ok(peer) => peer.ip(),
             Err(error) => {
                 let _ = stream.shutdown(Shutdown::Both);
-                warn!(%error, "bağlantının kaynak adresi belirlenemedi");
+                warn!(%error, "failed to determine connection peer address");
                 continue;
             }
         };
@@ -143,7 +143,7 @@ fn main() -> Result<()> {
             ConnectionPermit::try_acquire(&total_connections, &connection_quotas, peer_ip)
         else {
             reject_rate_limited(&mut stream);
-            warn!(%peer_ip, "eşzamanlı bağlantı kotası aşıldı");
+            warn!(%peer_ip, "concurrent connection quota exceeded");
             continue;
         };
 
@@ -153,11 +153,11 @@ fn main() -> Result<()> {
             .stack_size(CONNECTION_THREAD_STACK_SIZE)
             .spawn(move || {
                 if let Err(error) = handle_connection(stream, &waiting, Some(permit)) {
-                    warn!(%error, "relay bağlantısı kapandı");
+                    warn!(%error, "relay connection closed");
                 }
             });
         if let Err(error) = spawn_result {
-            warn!(%error, %peer_ip, "relay bağlantı thread'i başlatılamadı");
+            warn!(%error, %peer_ip, "failed to start relay connection thread");
         }
     }
     Ok(())
@@ -183,13 +183,13 @@ fn listen_address() -> Result<String> {
             "--listen" => {
                 listen = arguments
                     .next()
-                    .context("--listen için HOST:PORT değeri gerekli")?;
+                    .context("--listen requires a HOST:PORT value")?;
             }
             "--help" | "-h" => {
                 println!("RustView blind relay\n\nUSAGE:\n  rustview-relay [--listen HOST:PORT]");
                 std::process::exit(0);
             }
-            unknown => bail!("bilinmeyen argüman: {unknown}"),
+            unknown => bail!("unknown argument: {unknown}"),
         }
     }
     Ok(listen)
@@ -230,22 +230,22 @@ fn read_relay_request(stream: &mut TcpStream, timeout: Duration) -> Result<Relay
     stream.set_nonblocking(true)?;
     let deadline = Instant::now()
         .checked_add(timeout)
-        .context("relay kontrol zaman aşımı hesaplanamadı")?;
+        .context("failed to calculate relay control deadline")?;
 
     let result = (|| {
         let mut prefix = [0_u8; 2];
         read_exact_until(stream, &mut prefix, deadline)?;
         let length = usize::from(u16::from_be_bytes(prefix));
         if length == 0 {
-            bail!("boş relay kontrol çerçevesi");
+            bail!("empty relay control frame");
         }
         if length > MAX_RELAY_REQUEST_SIZE {
-            bail!("relay kontrol çerçevesi çok büyük: {length} > {MAX_RELAY_REQUEST_SIZE}");
+            bail!("relay control frame is too large: {length} > {MAX_RELAY_REQUEST_SIZE}");
         }
 
         let mut encoded = vec![0_u8; length];
         read_exact_until(stream, &mut encoded, deadline)?;
-        decode_message(&encoded).context("relay kontrol isteği çözümlenemedi")
+        decode_message(&encoded).context("failed to decode relay control request")
     })();
 
     let blocking_result = stream.set_nonblocking(false);
@@ -267,7 +267,7 @@ fn read_exact_until(
         if now >= deadline {
             return Err(io::Error::new(
                 ErrorKind::TimedOut,
-                "relay kontrol isteği zaman aşımına uğradı",
+                "relay control request timed out",
             ));
         }
 
@@ -321,7 +321,7 @@ fn register_host(
         remove_registration(waiting, &route_id, registration_id);
         return Err(error.into());
     }
-    info!(route = %route_label(&route_id), "host bekliyor");
+    info!(route = %route_label(&route_id), "host is waiting");
     if let Err(error) = host.set_nonblocking(true) {
         remove_registration(waiting, &route_id, registration_id);
         return Err(error.into());
@@ -339,7 +339,7 @@ fn register_host(
                     code: RelayErrorCode::Unavailable,
                 },
             );
-            info!(route = %route_label(&route_id), "davet zaman aşımına uğradı");
+            info!(route = %route_label(&route_id), "host registration timed out");
             break Ok(());
         }
 
@@ -359,15 +359,15 @@ fn register_host(
                     break Err(error.into());
                 }
                 write_message(&mut viewer, &RelayResponse::ClaimAccepted)?;
-                info!(route = %route_label(&route_id), "uçlar eşleştirildi");
-                let proxy_result = proxy(host, viewer).context("tünel hatası");
+                info!(route = %route_label(&route_id), "peers matched");
+                let proxy_result = proxy(host, viewer).context("tunnel error");
                 drop(viewer_permit);
                 break proxy_result;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => match waiting_host_is_unusable(&host) {
                 Ok(true) => {
                     remove_registration(waiting, &route_id, registration_id);
-                    info!(route = %route_label(&route_id), "host ayrıldı; davet kaldırıldı");
+                    info!(route = %route_label(&route_id), "host disconnected; registration removed");
                     break Ok(());
                 }
                 Ok(false) => {}
@@ -494,7 +494,7 @@ fn proxy(host: TcpStream, viewer: TcpStream) -> io::Result<()> {
     shutdown_tunnel(&viewer_reader, &host_writer);
     let first_result = first
         .join()
-        .map_err(|_| io::Error::other("relay kopyalama thread'i panikledi"))?;
+        .map_err(|_| io::Error::other("relay copy thread panicked"))?;
 
     match (first_result, second_result) {
         (Err(error), _) | (_, Err(error))
@@ -530,7 +530,7 @@ where
         if started_at.elapsed() >= TUNNEL_MAX_DURATION {
             return Err(io::Error::new(
                 ErrorKind::TimedOut,
-                "relay tüneli mutlak oturum süresini aştı",
+                "relay tunnel exceeded the maximum session duration",
             ));
         }
         match reader.read(&mut buffer) {
@@ -549,7 +549,7 @@ where
                 if idle_for >= TUNNEL_IDLE_TIMEOUT {
                     return Err(io::Error::new(
                         ErrorKind::TimedOut,
-                        "relay tüneli boşta kalma süresini aştı",
+                        "relay tunnel exceeded the idle timeout",
                     ));
                 }
             }

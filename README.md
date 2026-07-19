@@ -1,75 +1,81 @@
 # RustView
 
-RustView, Rust ile geliştirilen açık kaynak ve çapraz platform bir uzak masaüstü
-uygulamasıdır. Hedefi; macOS, Windows ve Linux arasında ekran görüntüsünü paylaşmak
-ve kullanıcının açık onayıyla fare/klavye kontrolü sağlamaktır.
+RustView is an open-source, cross-platform remote desktop application written in
+Rust. Its goal is to share a screen between macOS, Windows, and Linux and to
+provide mouse and keyboard control only with the local user's explicit consent.
 
 > [!WARNING]
-> RustView şu anda erken geliştirme aşamasındadır. Güvenlik incelemesi yapılmış,
-> üretime hazır bir TeamViewer veya AnyDesk alternatifi değildir. Güvenmediğiniz
-> kişilerle erişim parolanızı paylaşmayın ve hassas sistemlerde kullanmayın.
+> RustView is currently in an early stage of development. It has not undergone
+> an independent security audit and is not a production-ready alternative to
+> TeamViewer or AnyDesk. Do not share your access password with people you do
+> not trust, and do not use RustView on sensitive systems.
 
-## İlk MVP'nin kapsamı
+## Initial MVP scope
 
-İlk kullanılabilir sürüm bilinçli olarak küçüktür:
+The first usable release is intentionally small:
 
-- Tek ekranın yaklaşık **720p, 5-10 FPS JPEG** olarak paylaşılması
-- macOS, Windows ve Linux/X11 üzerinde temel ekran yakalama
-- Yerel kullanıcı onayından sonra temel fare ve klavye kontrolü
-- İki istemci arasında uçtan uca Noise şifrelemesi
-- Şifreli veriyi açmadan ileten basit bir TCP rendezvous/relay servisi
-- Kalıcı, herkese açık 9 haneli cihaz kimliği; her uygulama açılışında yenilenen
-  80-bit geçici erişim parolası ve her gelen istekte açık yerel onay
+- Share one display as approximately **720p, 5–10 FPS JPEG**
+- Basic screen capture on macOS, Windows, and Linux/X11
+- Basic mouse and keyboard control after local user approval
+- End-to-end Noise encryption between the two clients
+- A simple TCP rendezvous/relay service that forwards encrypted data without
+  decrypting it
+- A persistent, public nine-digit device ID; an 80-bit temporary access password
+  regenerated on every application launch; and explicit local approval for every
+  incoming request
 
-İlk MVP'de **yoktur**:
+The initial MVP does **not** include:
 
-- Gözetimsiz erişim veya kalıcı parola
-- Dosya aktarımı, pano senkronizasyonu ve ses aktarımı
-- Windows UAC güvenli masaüstü ya da oturum açma ekranı kontrolü
-- Wayland üzerinde güvenilir uzaktan giriş desteği
-- Donanım hızlandırmalı video codec'i veya AnyDesk düzeyinde gecikme/bant genişliği
-- Doğrudan P2P/NAT traversal; ilk MVP'de iki uç da relay'e bağlanır
+- Unattended access or a persistent password
+- File transfer, clipboard synchronization, or audio streaming
+- Control of the Windows UAC secure desktop or login screen
+- Reliable remote input support on Wayland
+- A hardware-accelerated video codec or AnyDesk-class latency/bandwidth
+  performance
+- Direct P2P/NAT traversal; both endpoints connect to the relay in the initial MVP
 
-Ayrıntılı kilometre taşları için [yol haritasına](docs/ROADMAP.md), işletim sistemi
-sınırları için [platform destek tablosuna](docs/PLATFORM_SUPPORT.md) bakın.
+See the [roadmap](docs/ROADMAP.md) for detailed milestones and the
+[platform support matrix](docs/PLATFORM_SUPPORT.md) for operating-system limits.
 
-## Nasıl çalışır?
+## How it works
 
-RustView ilk açılışta bu kuruluma ait kalıcı, herkese açık 9 haneli bir `DeviceId`
-üretir. Her uygulama çalıştırmasında ayrıca 16 karakterlik, 80-bit rastgele bir
-`AccessPassword` üretir; bu parola diske yazılmaz ve uygulama içinden yenilenebilir.
+On first launch, RustView generates a persistent, public nine-digit `DeviceId` for
+the installation. On every application run, it also generates a random,
+16-character, 80-bit `AccessPassword`. This password is never written to disk and
+can be regenerated from the application.
 
-Host'un kimliği ve geçici parolası, birbirinden ayrı domain'lerle 10 baytlık relay
-route'una ve 32 baytlık Noise PSK'sına türetilir. Route yalnız herkese açık cihaz
-kimliğinden türetilmez. Relay yalnız route değerini alır; cihaz kimliği, erişim
-parolası ve PSK relay protokolünde düz metin gönderilmez. Eşleşen istemciler
-`Noise_XXpsk0_25519_ChaChaPoly_BLAKE2s` el sıkışması yapar. Ekran ve giriş verisi
-yalnız bu el sıkışmadan ve host tarafındaki açık yerel onaydan sonra taşınır.
+The host's identity and temporary password are derived under separate domains into
+a 10-byte relay route and a 32-byte Noise PSK. The route is not derived from the
+public device ID alone. The relay receives only the route value; the device ID,
+access password, and PSK are never sent in plaintext in the relay protocol.
+Matched clients perform a `Noise_XXpsk0_25519_ChaChaPoly_BLAKE2s` handshake.
+Screen and input data are transferred only after that handshake and after explicit
+local approval on the host.
 
 ```mermaid
 flowchart LR
-    H["Host: capture ve yerel onay"]
-    R["Kör TCP relay: şifreli baytları iletir"]
-    C["Controller: görüntü ve giriş"]
-    H <-->|"Noise ile uçtan uca şifreli"| R
-    R <-->|"Noise ile uçtan uca şifreli"| C
+    H["Host: capture and local approval"]
+    R["Blind TCP relay: forwards encrypted bytes"]
+    C["Controller: display and input"]
+    H <-->|"End-to-end encrypted with Noise"| R
+    R <-->|"End-to-end encrypted with Noise"| C
 ```
 
-Relay ekranı, giriş olaylarını, erişim parolasını veya türetilmiş Noise PSK'sını
-okuyamaz. Buna karşın IP adreslerini, route değerini, bağlantı zamanlarını ve trafik
-miktarı/zamanlaması gibi metadataları görebilir. Ayrıntılar
-[güvenlik tasarımında](docs/SECURITY.md) yer alır.
+The relay cannot read the screen, input events, access password, or derived Noise
+PSK. It can, however, observe IP addresses, route values, connection times, and
+metadata such as traffic volume and timing. See the [security design](docs/SECURITY.md)
+for details.
 
-## Gereksinimler
+## Requirements
 
-- Rust **1.92** veya üzeri
-- macOS, Windows ya da Linux masaüstü ortamı
-- macOS'ta Xcode Command Line Tools
-- Windows'ta MSVC Rust toolchain ve Visual Studio Build Tools “Desktop development
-  with C++” bileşenleri
-- Linux'ta ekran yakalama ve pencereleme için yerel geliştirme paketleri
+- Rust **1.92** or later
+- A macOS, Windows, or Linux desktop environment
+- Xcode Command Line Tools on macOS
+- The MSVC Rust toolchain and the Visual Studio Build Tools “Desktop development
+  with C++” components on Windows
+- Native development packages for screen capture and windowing on Linux
 
-Ubuntu/Debian için örnek bağımlılıklar:
+Example dependencies for Ubuntu/Debian:
 
 ```bash
 sudo apt-get update
@@ -79,82 +85,86 @@ sudo apt-get install -y \
   libxkbcommon-dev libxrandr-dev
 ```
 
-Dağıtıma göre paket adları değişebilir. Wayland ekran yakalama için çalışan bir
-XDG Desktop Portal ve PipeWire kurulumu da gerekir.
+Package names may vary by distribution. Wayland screen capture also requires a
+working XDG Desktop Portal and PipeWire installation.
 
-## Geliştirme ortamında çalıştırma
+## Running in a development environment
 
-Depoyu klonladıktan sonra önce tüm workspace'i doğrulayın:
+After cloning the repository, validate the entire workspace first:
 
 ```bash
 cargo build --workspace
 cargo test --workspace
 ```
 
-Bir terminalde relay'i başlatın:
+Start the relay in one terminal:
 
 ```bash
 cargo run -p rustview-relay -- --listen 127.0.0.1:21116
 ```
 
-Relay varsayılan olarak `0.0.0.0:21116` dinler; yerel geliştirmede yukarıdaki gibi
-loopback adresini açıkça vermek daha güvenlidir. Adres ayrıca
-`RUSTVIEW_RELAY_LISTEN` ortam değişkeniyle ayarlanabilir. İnternet üzerinden test
-için port/firewall yapılandırmasının sorumluluğu relay operatöründedir.
+The relay listens on `0.0.0.0:21116` by default. For local development, explicitly
+binding the loopback address as shown above is safer. The address can also be set
+with the `RUSTVIEW_RELAY_LISTEN` environment variable. The relay operator is
+responsible for port and firewall configuration when testing over the internet.
 
 > [!CAUTION]
-> MVP relay'i raw TCP kullanır. Noise ekran/giriş içeriğini uçtan uca korur; ancak
-> relay sunucusunun kendisi henüz TLS sertifikasıyla doğrulanmaz. Public internet
-> servisi kurmadan önce TLS/QUIC, dağıtık rate limit, bant genişliği kotası,
-> gözlemleme ve bağımsız güvenlik incelemesi gerekir.
+> The MVP relay uses raw TCP. Noise protects screen and input content end to end,
+> but the relay server itself is not yet authenticated with a TLS certificate.
+> Before operating a public internet service, RustView requires TLS/QUIC,
+> distributed rate limiting, bandwidth quotas, observability, and an independent
+> security review.
 
-Ardından host ve controller bilgisayarlarda masaüstü uygulamasını açın:
+Then launch the desktop application on the host and controller computers:
 
 ```bash
 cargo run -p rustview-desktop
 ```
 
-Geliştirme akışı şöyledir:
+The development flow is:
 
-1. Her iki uygulamada aynı relay adresini seçin.
-2. Host'un ekranda gösterilen 9 haneli RustView kimliğini ve 16 karakterlik geçici
-   parolasını güvenli bir kanaldan uzak kullanıcıya gönderin.
-3. Uzak kullanıcı önce RustView kimliğini, açılan modalda da geçici parolayı girer.
-4. Uzak kullanıcı yalnız görüntüleme veya ayrıca klavye/fare kontrolü isteyebilir;
-   kontrol isteği varsayılan olarak kapalıdır.
-5. Host, bağlanan tarafı ve istenen izinleri yerel ekranda görüp açıkça onaylar.
-   Görüntüleme ve kontrol izinleri ayrı ayrı değerlendirilir.
-6. Oturum göstergesi açık kaldığı sürece ekran paylaşılır; host istediği anda
-   oturumu durdurabilir.
+1. Select the same relay address in both applications.
+2. Send the host's displayed nine-digit RustView ID and 16-character temporary
+   password to the remote user through a secure channel.
+3. The remote user enters the RustView ID, then enters the temporary password in
+   the dialog that opens.
+4. The remote user can request view-only access or keyboard/mouse control as well;
+   control requests are disabled by default.
+5. The host reviews the connecting party and requested permissions on the local
+   screen and explicitly approves them. View and control permissions are evaluated
+   separately.
+6. The screen is shared while the session indicator remains active. The host can
+   stop the session at any time.
 
-Geçici parola uygulama yeniden başlatıldığında veya UI'daki **Yenile** eylemiyle
-değişir. Parola aynı uygulama çalıştırması içinde birden fazla bağlantı isteğinde
-kullanılabilse de her istek host ekranında yeniden yerel onay gerektirir. RustView
-gözetimsiz erişim sağlamaz.
+The temporary password changes when the application restarts or when the
+**Regenerate** action is selected in the UI. Although a password can be used for
+multiple connection requests during the same application run, every request still
+requires new local approval on the host. RustView does not provide unattended
+access.
 
-Relay CLI seçenekleri için yardım çıktısını kullanın. Masaüstü uygulamasında relay
-adresi UI içinden kaydedilir; sonraki açılışta yeniden yüklenir. `RUSTVIEW_RELAY`
-ortam değişkeni varsa kayıtlı değerin önüne geçer:
+Use the help output for relay CLI options. The relay address is saved from the
+desktop UI and restored on the next launch. If set, the `RUSTVIEW_RELAY`
+environment variable takes precedence over the saved value:
 
 ```bash
 cargo run -p rustview-relay -- --help
 RUSTVIEW_RELAY=127.0.0.1:21116 cargo run -p rustview-desktop
 ```
 
-PowerShell karşılığı:
+PowerShell equivalent:
 
 ```powershell
 $env:RUSTVIEW_RELAY = "127.0.0.1:21116"
 cargo run -p rustview-desktop
 ```
 
-RustView diskte yalnız herkese açık cihaz kimliğini ve secret olmayan relay adresi
-ayarını saklar. Varsayılan `device-id` ve `relay-address` konumu macOS'ta
-`~/Library/Application Support/RustView/`, Windows'ta
-`%APPDATA%\RustView\`, Linux'ta `$XDG_CONFIG_HOME/rustview/` (değişken yoksa
-`~/.config/rustview/`) altındadır. Test, taşınabilir kurulum veya özel paketleme için
-`RUSTVIEW_CONFIG_DIR` bir dizine ayarlanabilir; RustView bu dizinin altında
-iki dosyayı da oluşturur. Geçici parola bu dizine yazılmaz.
+RustView persists only the public device ID and the non-secret relay address
+setting. The default locations for `device-id` and `relay-address` are
+`~/Library/Application Support/RustView/` on macOS, `%APPDATA%\RustView\` on
+Windows, and `$XDG_CONFIG_HOME/rustview/` on Linux (or `~/.config/rustview/` when
+the variable is not set). For tests, portable installations, or custom packaging,
+set `RUSTVIEW_CONFIG_DIR` to a directory; RustView creates both files there. The
+temporary password is never written to that directory.
 
 ```bash
 RUSTVIEW_CONFIG_DIR=/tmp/rustview-config cargo run -p rustview-desktop
@@ -165,39 +175,39 @@ $env:RUSTVIEW_CONFIG_DIR = "C:\Temp\rustview-config"
 cargo run -p rustview-desktop
 ```
 
-## Platform izinleri
+## Platform permissions
 
-- **macOS:** Screen Recording izni ekran için, Accessibility izni uzaktan giriş
-  için ayrıdır. İzin verildikten sonra uygulamayı yeniden başlatmak gerekebilir.
-- **Windows:** Normal kullanıcı masaüstü hedeflenir. UAC güvenli masaüstü,
-  oturum açma ekranı ve bazı korumalı içerikler erişilemez.
-- **Linux/X11:** Ekran yakalama ve temel giriş desteklenir; X11'in güven modeli
-  diğer uygulamaları yeterince izole etmez.
-- **Linux/Wayland:** Ekran yakalama compositor/portal desteğine bağlı ve deneysel
-  kalır. Mevcut MVP build'i Wayland oturumunu algıladığında giriş enjeksiyonunu
-  açmaz; kontrol isteği güvenli biçimde yalnız görüntüleme moduna düşürülür.
+- **macOS:** Screen Recording permission for capture and Accessibility permission
+  for remote input are separate. The application may need to be restarted after
+  permission is granted.
+- **Windows:** The normal user desktop is targeted. The UAC secure desktop, login
+  screen, and some protected content are inaccessible.
+- **Linux/X11:** Screen capture and basic input are supported; the X11 security
+  model does not adequately isolate applications from one another.
+- **Linux/Wayland:** Screen capture depends on compositor/portal support and remains
+  experimental. When the current MVP build detects a Wayland session, it does not
+  enable input injection; control requests safely fall back to view-only mode.
 
-RustView izin ekranlarını atlatmaya çalışmaz ve tüm uygulamayı yönetici/root olarak
-çalıştırmayı istemez.
+RustView does not attempt to bypass permission screens and does not ask users to
+run the entire application as Administrator or root.
 
-## Depo yapısı
+## Repository layout
 
 ```text
-apps/rustview-desktop/       egui/eframe masaüstü uygulaması
-crates/rustview-core/        protokol, kimlik/parola türetimi, şifreleme ve ortak tipler
-services/rustview-relay/     kör TCP rendezvous/relay servisi
-docs/                        mimari, güvenlik ve platform belgeleri
+apps/rustview-desktop/       egui/eframe desktop application
+crates/rustview-core/        protocol, identity/password derivation, encryption, and shared types
+services/rustview-relay/     blind TCP rendezvous/relay service
+docs/                        architecture, security, and platform documentation
 ```
 
-Teknik bileşenler ve veri akışı için [ARCHITECTURE.md](docs/ARCHITECTURE.md)
-belgesine bakın.
+See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for technical components and data flow.
 
-## Katkı ve güvenlik bildirimleri
+## Contributing and security reports
 
-Katkılar memnuniyetle kabul edilir. Başlamadan önce [CONTRIBUTING.md](CONTRIBUTING.md)
-belgesini okuyun. Bir güvenlik açığı bulduysanız herkese açık issue açmayın;
-[güvenlik bildirim politikasını](SECURITY.md) izleyin.
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before starting.
+If you discover a vulnerability, do not open a public issue; follow the
+[security reporting policy](SECURITY.md).
 
-## Lisans
+## License
 
-RustView, [MIT Lisansı](LICENSE-MIT) altında sunulur.
+RustView is available under the [MIT License](LICENSE-MIT).

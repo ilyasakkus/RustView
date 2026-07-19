@@ -1,168 +1,177 @@
-# RustView yol haritası
+# RustView roadmap
 
-RustView aşamalı geliştirilecektir. Her kilometre taşı, gösterişli özellik sayısından
-önce güvenli onay akışını ve çapraz-platform doğrulanabilirliği hedefler. Tarihler
-bilinçli olarak sabitlenmemiştir; bir aşama kabul kriterleri tamamlanmadan sonraki
-aşama “destekleniyor” sayılmaz.
+RustView will be developed incrementally. Each milestone prioritizes a safe
+approval flow and verifiable cross-platform behavior over an impressive feature
+count. Dates are intentionally not fixed; a phase is not considered “supported”
+until its acceptance criteria are complete.
 
-## M0 — Proje temeli
+## M0 — Project foundation
 
-Durum: **uygulama tamamlandı; üç platformlu CI'nın gerçek çalışması repository
-yayınını bekliyor**
+Status: **implementation complete; actual three-platform CI runs await repository
+publication**
 
-- Cargo workspace ve `rustview-core`, `rustview-desktop`, `rustview-relay` paketleri
-- Rust 2024 / MSRV politikası, fmt, clippy ve üç platformlu CI
-- Basit egui uygulama kabuğu
-- Sürümlü wire mesajları, bounded framing ve ortak hata tipleri
-- Katkı, mimari, güvenlik ve platform belgeleri
+- Cargo workspace and the `rustview-core`, `rustview-desktop`, and
+  `rustview-relay` packages
+- Rust 2024/MSRV policy, formatting, Clippy, and three-platform CI
+- Simple egui application shell
+- Versioned wire messages, bounded framing, and shared error types
+- Contribution, architecture, security, and platform documentation
 
-Kabul kriterleri:
+Acceptance criteria:
 
 - `cargo fmt --all -- --check`
 - `cargo check --workspace --all-targets`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo test --workspace`
-- macOS, Windows ve Ubuntu CI işlerinin geçmesi
+- Passing macOS, Windows, and Ubuntu CI jobs
 
-## M1 — Güvenli relay üzerinden uzak masaüstü MVP'si
+## M1 — Remote desktop MVP through a secure relay
 
-Durum: **çalışan prototip; gerçek cihaz ve güvenlik sertleştirmesi sürüyor**
+Status: **working prototype; real-device validation and security hardening continue**
 
-- Kurulum başına kalıcı, herkese açık 9 haneli cihaz kimliği
-- Her uygulama açılışında üretilen, diske yazılmayan 16 karakter/80-bit geçici
-  erişim parolası; UI'da kopyalama ve yenileme
-- ID + paroladan ayrı domain'lerle 10 bayt relay route'u ve 32 bayt Noise PSK'sı
-  türetme; route yalnız public ID'den türetilmez
-- İç/legacy primitive olarak `RV1` invitation üretme/parse etme; kullanıcı UI'sında
-  ID ve parola ayrı alanlardır
-- Kısa TTL'li, claim başına tek kullanımlık relay kaydı ve host'un otomatik yeniden
-  kaydı
+- Persistent, public nine-digit device ID per installation
+- A 16-character/80-bit temporary access password generated on every application
+  launch and never written to disk, with copy and regenerate actions in the UI
+- Derivation of a 10-byte relay route and 32-byte Noise PSK from the ID + password
+  under separate domains; the route is not derived from the public ID alone
+- Generation/parsing of the `RV1` invitation as an internal/legacy primitive; the
+  user-facing UI uses separate ID and password fields
+- Short-TTL, single-claim relay registration and automatic re-registration by the
+  host
 - Raw TCP `Register`/`Claim` rendezvous
-- Kör, içerik açmayan byte relay
-- `Noise_XXpsk0_25519_ChaChaPoly_BLAKE2s` handshake ve transport
-- Host'ta yerel bağlantı onayı
-- ID girdisinden sonra ayrı parola modalı; parola doğrulamasından sonra da zorunlu
-  açık host onayı
-- Tek ekran capture, 720p ölçekleme, JPEG encode/decode
-- 5-10 FPS hedefi ve “latest frame wins” backpressure
-- Controller'da uzak ekranı gösterme
-- Ayrı view-only/control isteği ve host'ta açık yerel izin
-- Temel fare, düğme, scroll ve USB HID klavye olayları
-- Input session/grant epoch/sequence doğrulaması
+- Blind byte relay that does not decrypt content
+- `Noise_XXpsk0_25519_ChaChaPoly_BLAKE2s` handshake and transport
+- Local connection approval on the host
+- A separate password dialog after ID entry; mandatory explicit host approval even
+  after password verification
+- Single-display capture, scaling to 720p, and JPEG encoding/decoding
+- A 5–10 FPS target and “latest frame wins” backpressure
+- Display of the remote screen on the controller
+- Separate view-only/control requests and explicit local host permission
+- Basic mouse, button, scroll, and USB HID keyboard events
+- Input session/grant epoch/sequence validation
 
-Kabul kriterleri:
+Acceptance criteria:
 
-- Relay erişim parolasını veya türetilmiş PSK'yı düz metin elde edememeli
-- Yanlış ID/parola, bozuk veya replay handshake fail-closed kapanmalı
-- Onaydan önce ekran capture/aktarımı veya input başlamamalı
-- View-only grant ile hiçbir input uygulanmamalı
-- Yavaş controller bellek kullanımını sınırsız büyütmemeli
-- LAN ve relay senaryosunda en az 30 dakikalık smoke test geçmeli
+- The relay must not obtain the access password or derived PSK in plaintext.
+- Incorrect ID/password combinations and malformed or replayed handshakes must
+  fail closed.
+- Screen capture/transfer and input must not begin before approval.
+- No input may be applied under a view-only grant.
+- A slow controller must not cause unbounded memory growth.
+- At least 30 minutes of smoke testing must pass in LAN and relay scenarios.
 
-## M2 — Platform ve kontrol sertleştirmesi
+## M2 — Platform and control hardening
 
-Durum: **kısmen uygulandı**
+Status: **partially implemented**
 
-- Her platformda izin/capability algılama ve güvenli view-only fallback
-- HiDPI ve seçili monitöre göre koordinat eşleme
-- Disconnect, stop ve viewer focus kaybında sentetik input release (**uygulandı**)
-- Host'ta belirgin aktif oturum göstergesi ve tek eylemli kesme (**uygulandı**)
-- Wayland/XWayland oturumunda zorunlu view-only fallback (**uygulandı**)
-- macOS Accessibility ve Linux/Wayland capability fallback UX'i
-- Farklı klavye düzeni, IME, modifier ve özel tuş testleri
+- Permission/capability detection and safe view-only fallback on every platform
+- Coordinate mapping for HiDPI and the selected monitor
+- Release of synthetic input on disconnect, stop, and viewer focus loss
+  (**implemented**)
+- Prominent active-session indicator and one-action disconnect on the host
+  (**implemented**)
+- Mandatory view-only fallback in Wayland/XWayland sessions (**implemented**)
+- UX for macOS Accessibility and Linux/Wayland capability fallback
+- Tests for keyboard layouts, IMEs, modifiers, and special keys
 
-Kabul kriterleri:
+Acceptance criteria:
 
-- Property test: yerel onay ve `CONTROL` izni olmadan hiçbir input uygulanmamalı
-- Permission oturum sırasında uzaktan yükseltilememeli
-- Bağlantı her hata yolunda basılı tuş/düğmeleri bırakmalı
-- macOS, Windows ve Linux/X11 gerçek cihaz test matrisi yayınlanmalı
+- Property test: no input may be applied without local approval and `CONTROL`
+  permission.
+- Permissions must not be remotely elevated during a session.
+- Every error path must release pressed keys/buttons.
+- A real-device test matrix must be published for macOS, Windows, and Linux/X11.
 
-## M3 — Dağıtım ve güvenlik sertleştirmesi
+## M3 — Distribution and security hardening
 
-Durum: **relay kaynak limitlerinin ilk katmanı uygulandı; release sertleştirmesi
-planlandı**
+Status: **the first layer of relay resource limits is implemented; release
+hardening is planned**
 
-- Relay mutlak kontrol deadline'ı, TTL, kopan host temizliği, idle/write/session
-  timeout'u, FD bütçesi ile toplam ve IP başına eşzamanlı bağlantı kotası
-  (**uygulandı**)
-- Dağıtık token-bucket rate limit ile bandwidth/session quota (**planlandı**)
-- Relay için server-authenticated TLS 1.3 veya QUIC transport (**planlandı**)
-- Cihaz kimliği/parola, iç invitation ve framing fuzzing; Noise negative/replay
-  testleri
-- `cargo audit`, `cargo deny`, SBOM ve dependency policy
-- Hassas veri redaksiyonlu tracing/metrics
-- macOS signing/notarization, Windows signing ve Linux paketleri
-- Güvenli güncelleme tasarımı
-- Bağımsız tehdit modeli ve kriptografi entegrasyonu incelemesi
+- Relay absolute control deadline, TTL, disconnected-host cleanup,
+  idle/write/session timeouts, FD budget, and total and per-IP concurrent-connection
+  quotas (**implemented**)
+- Distributed token-bucket rate limiting with bandwidth/session quotas (**planned**)
+- Server-authenticated TLS 1.3 or QUIC transport for the relay (**planned**)
+- Fuzzing of device ID/password handling, the internal invitation, and framing;
+  Noise negative/replay tests
+- `cargo audit`, `cargo deny`, SBOM, and dependency policy
+- Tracing/metrics with sensitive-data redaction
+- macOS signing/notarization, Windows signing, and Linux packages
+- Secure update design
+- Independent threat-model and cryptographic-integration review
 
-Kabul kriterleri:
+Acceptance criteria:
 
-- Açık yüksek/critical güvenlik bulgusu olmaması
-- Paketlerin temiz macOS, Windows ve desteklenen Linux ortamında kurulması
-- Release artifact bütünlüğünün kullanıcı tarafından doğrulanabilmesi
-- Kaynak tüketimi/abuse limitlerinin belgelenmiş ve test edilmiş olması
+- No open high- or critical-severity security findings
+- Packages install on clean macOS, Windows, and supported Linux environments
+- Users can verify release-artifact integrity
+- Resource consumption and abuse limits are documented and tested
 
-## M4 — QUIC, NAT traversal ve doğrudan bağlantı
+## M4 — QUIC, NAT traversal, and direct connections
 
-Durum: **araştırma / planlandı**
+Status: **research/planned**
 
-- Ağ kodunu `PeerTransport` arayüzü arkasına almak
-- QUIC stream/datagram prototipi
-- iroh ile authenticated endpoint, NAT traversal ve şifreli relay fallback incelemesi
-- Uygulama broker'ı veya address lookup tasarımı
-- Direct bağlantı başarısızsa otomatik relay fallback
-- Control ve media için ayrı öncelik/güvenilirlik politikaları
+- Place network code behind a `PeerTransport` interface
+- Prototype QUIC streams/datagrams
+- Evaluate authenticated endpoints, NAT traversal, and encrypted relay fallback
+  with iroh
+- Design an application broker or address lookup
+- Automatically fall back to the relay when a direct connection fails
+- Separate priority/reliability policies for control and media
 
-Kabul kriterleri:
+Acceptance criteria:
 
-- Direct ve relay yolları aynı oturum state machine'ini kullanmalı
-- Relay içerik gizliliği ve credential-derived PSK binding korunmalı
-- Kötü coordinator endpoint substitution ile auth'u geçememeli
-- Paket kaybında input gecikmesi TCP MVP'den ölçülebilir biçimde daha iyi olmalı
-- NAT traversal sıfırdan yazılmamalı; seçilen bağımlılık ve relay self-host edilebilmeli
+- Direct and relayed paths must use the same session state machine.
+- Relay content confidentiality and credential-derived PSK binding must be
+  preserved.
+- A malicious coordinator must not bypass authentication through endpoint
+  substitution.
+- Input latency under packet loss must be measurably better than the TCP MVP.
+- NAT traversal must not be written from scratch; the selected dependency and relay
+  must be self-hostable.
 
-## M5 — Medya verimliliği ve platform backend'leri
+## M5 — Media efficiency and platform backends
 
-Durum: **gelecek**
+Status: **future**
 
-- Windows DXGI/Desktop Duplication native capture
-- macOS ScreenCaptureKit native capture
+- Native Windows DXGI/Desktop Duplication capture
+- Native macOS ScreenCaptureKit capture
 - Linux XDG ScreenCast/RemoteDesktop portal + PipeWire backend
-- Dirty region ve cursor metadata
+- Dirty-region and cursor metadata
 - Codec capability negotiation
-- Donanım hızlandırmalı H.264/AV1 veya lisansı uygun alternatifler
-- Adaptive bitrate, çözünürlük ve frame rate
-- Çoklu monitör seçimi/değişimi
+- Hardware-accelerated H.264/AV1 or appropriately licensed alternatives
+- Adaptive bitrate, resolution, and frame rate
+- Multi-monitor selection and switching
 
-Bu aşama tamamlanana kadar RustView, 720p/5-10 FPS JPEG MVP sınırını açıkça
-belirtmeye devam eder. FFmpeg/x264 gibi bağımlılıklar lisans ve paketleme incelemesi
-olmadan varsayılan build'e eklenmez.
+Until this phase is complete, RustView will continue to state the 720p/5–10 FPS
+JPEG MVP limit explicitly. Dependencies such as FFmpeg/x264 will not be added to
+the default build without license and packaging review.
 
-## M6 — Sonraki ürün özellikleri
+## M6 — Later product features
 
-Durum: **MVP dışı; taahhüt değil**
+Status: **outside the MVP; not a commitment**
 
-Olası özellikler:
+Possible features:
 
-- Pano paylaşımı, açık ve ayrı izinle
-- Dosya aktarımı, sandbox ve kullanıcı onayıyla
-- Ses aktarımı
-- Adres defteri ve doğrulanmış cihaz fingerprint'leri
-- Erişilebilirlik ve yerelleştirme iyileştirmeleri
-- Mobil viewer
+- Clipboard sharing with explicit, separate permission
+- File transfer with sandboxing and user approval
+- Audio streaming
+- Address book and verified device fingerprints
+- Accessibility and localization improvements
+- Mobile viewer
 
-Gözetimsiz erişim özellikle ayrı bir güvenlik projesidir. Mevcut kalıcı 9 haneli
-kimlik herkese açık bir locator'dır ve kimlik doğrulama anahtarı değildir. Güvenli OS
-key store'da kalıcı cihaz anahtarı, kalıcı erişim politikası/PAKE, revoke, audit ve
-update modeli tamamlanmadan gözetimsiz erişim eklenmeyecektir.
+Unattended access is explicitly a separate security project. The current persistent
+nine-digit ID is a public locator, not an authentication key. Unattended access
+will not be added until persistent device keys in a secure OS key store, persistent
+access policy/PAKE, revocation, audit, and update models are complete.
 
-## Sürekli ilkeler
+## Continuous principles
 
-- Güvenli varsayılan: view-only, yerel onay, yalnız uygulama çalıştırması boyunca
-  yaşayan geçici erişim parolası
-- Yetki atlama yerine platformun izin modeline uyum
-- Relay ve coordinator'ı içerik güven kökü yapmama
-- Bounded allocation ve fail-closed protokol işleme
-- Özelliği “destekleniyor” işaretlemeden önce gerçek cihaz testi
-- Güvenlik açığını yeni özellikten önce düzeltme
+- Secure defaults: view-only, local approval, and a temporary access password that
+  lives only for the current application run
+- Respect platform permission models instead of bypassing authorization
+- Do not make the relay or coordinator a content trust root
+- Bounded allocation and fail-closed protocol handling
+- Real-device testing before marking a feature “supported”
+- Fix vulnerabilities before adding new features

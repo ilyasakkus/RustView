@@ -163,7 +163,7 @@ fn spawn_worker(
                 errors.emit(Event::Error(format!("{error:#}")));
             }
         })
-        .context("ağ worker thread'i başlatılamadı")?;
+        .context("failed to start network worker thread")?;
     Ok(Worker {
         commands: command_sender,
         events: event_receiver,
@@ -179,10 +179,7 @@ fn host_worker(
 ) -> Result<()> {
     let result = host_worker_inner(relay_address, invitation, commands, events);
     if result.is_ok() {
-        emit(
-            events,
-            Event::Stopped("Paylaşım oturumu sona erdi".to_owned()),
-        );
+        emit(events, Event::Stopped("Sharing session ended".to_owned()));
     }
     result
 }
@@ -193,7 +190,7 @@ fn host_worker_inner(
     commands: &mpsc::Receiver<Command>,
     events: &EventSink,
 ) -> Result<()> {
-    emit(events, Event::Status("Relay'e bağlanıyor".to_owned()));
+    emit(events, Event::Status("Connecting to relay".to_owned()));
     let mut stream = connect(relay_address)?;
     write_message(
         &mut stream,
@@ -206,24 +203,26 @@ fn host_worker_inner(
         &stream,
         commands,
         RELAY_RESPONSE_TIMEOUT,
-        "relay kayıt yanıtı",
+        "relay registration response",
     )? {
         Some(response) => response,
         None => {
-            emit(events, Event::Stopped("Bağlantı iptal edildi".to_owned()));
+            emit(events, Event::Stopped("Connection cancelled".to_owned()));
             return Ok(());
         }
     };
     let ttl_secs = match response {
         RelayResponse::Registered { ttl_secs } if ttl_secs > 0 => ttl_secs,
-        RelayResponse::Registered { .. } => bail!("relay sıfır saniyelik davet süresi gönderdi"),
+        RelayResponse::Registered { .. } => {
+            bail!("relay returned a zero-second registration lifetime")
+        }
         other => return Err(relay_response_error(other)),
     };
     let ttl = Duration::from_secs(u64::from(ttl_secs)).min(MAX_RELAY_REGISTRATION_WAIT);
     emit(
         events,
         Event::Status(format!(
-            "Bağlantı bekleniyor · davet {} saniye geçerli",
+            "Waiting for a connection · relay registration valid for {} seconds",
             ttl.as_secs()
         )),
     );
@@ -231,11 +230,11 @@ fn host_worker_inner(
         &stream,
         commands,
         ttl.saturating_add(RELAY_RESPONSE_TIMEOUT),
-        "relay eşleşme yanıtı",
+        "relay pairing response",
     )? {
         Some(response) => response,
         None => {
-            emit(events, Event::Stopped("Bağlantı iptal edildi".to_owned()));
+            emit(events, Event::Stopped("Connection cancelled".to_owned()));
             return Ok(());
         }
     };
@@ -243,35 +242,41 @@ fn host_worker_inner(
         return Err(relay_response_error(response));
     }
 
-    emit(events, Event::Status("Şifreli kanal kuruluyor".to_owned()));
+    emit(
+        events,
+        Event::Status("Establishing encrypted channel".to_owned()),
+    );
     let channel = match establish_secure_channel(stream, Role::Host, &invitation, commands)? {
         Some(channel) => channel,
         None => {
-            emit(events, Event::Stopped("Bağlantı iptal edildi".to_owned()));
+            emit(events, Event::Stopped("Connection cancelled".to_owned()));
             return Ok(());
         }
     };
     channel.set_write_timeout(Some(SESSION_REQUEST_TIMEOUT))?;
 
-    let request =
-        match wait_for_peer_message(&channel, commands, SESSION_REQUEST_TIMEOUT, "oturum isteği")?
-        {
-            Some(message) => match message {
-                PeerMessage::SessionRequest(request) => request,
-                PeerMessage::Disconnect { .. } => {
-                    emit(
-                        events,
-                        Event::Stopped("Karşı taraf bağlantıyı kapattı".to_owned()),
-                    );
-                    return Ok(());
-                }
-                _ => bail!("oturum isteğinden önce beklenmeyen mesaj alındı"),
-            },
-            None => {
-                emit(events, Event::Stopped("Bağlantı iptal edildi".to_owned()));
+    let request = match wait_for_peer_message(
+        &channel,
+        commands,
+        SESSION_REQUEST_TIMEOUT,
+        "session request",
+    )? {
+        Some(message) => match message {
+            PeerMessage::SessionRequest(request) => request,
+            PeerMessage::Disconnect { .. } => {
+                emit(
+                    events,
+                    Event::Stopped("The remote peer closed the connection".to_owned()),
+                );
                 return Ok(());
             }
-        };
+            _ => bail!("received an unexpected message before the session request"),
+        },
+        None => {
+            emit(events, Event::Stopped("Connection cancelled".to_owned()));
+            return Ok(());
+        }
+    };
     let mut state = SessionState::new();
     state.register_request(&request)?;
     let requested_control = request.requested_permissions.can_control();
@@ -291,7 +296,7 @@ fn host_worker_inner(
                 reason: DisconnectReason::Timeout,
             })?;
             channel.shutdown()?;
-            emit(events, Event::Stopped("Onay süresi doldu".to_owned()));
+            emit(events, Event::Stopped("Approval timed out".to_owned()));
             return Ok(());
         }
         match commands.recv_timeout(remaining.min(Duration::from_millis(250))) {
@@ -303,7 +308,7 @@ fn host_worker_inner(
                     reason: DisconnectReason::Rejected,
                 })?;
                 channel.shutdown()?;
-                emit(events, Event::Stopped("Bağlantı reddedildi".to_owned()));
+                emit(events, Event::Stopped("Connection rejected".to_owned()));
                 return Ok(());
             }
             Ok(Command::Input(_)) | Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -316,17 +321,17 @@ fn host_worker_inner(
 
     // Native capture/input allocation happens only after explicit local approval.
     let capture = NativeCapture::new();
-    let monitors = capture.monitors().context("ekran listesi alınamadı")?;
-    let monitor = choose_monitor(&monitors).context("paylaşılabilir ekran bulunamadı")?;
+    let monitors = capture.monitors().context("failed to enumerate displays")?;
+    let monitor = choose_monitor(&monitors).context("no shareable display was found")?;
     let mut native_input = if requested_remote_control {
         match NativeInput::for_monitor(&monitor) {
             Ok(input) => Some(input),
             Err(error) => {
-                warn!(%error, "yerel input backend kullanılamıyor; yalnız görüntüleme");
+                warn!(%error, "native input backend is unavailable; using view-only mode");
                 emit(
                     events,
                     Event::Status(
-                        "Klavye/fare izni alınamadı; yalnız görüntüleme kullanılacak".to_owned(),
+                        "Keyboard and mouse access is unavailable; using view-only mode".to_owned(),
                     ),
                 );
                 None
@@ -396,7 +401,7 @@ fn viewer_worker(
     events: &EventSink,
     latest_frame: Arc<Mutex<Option<RemoteFrame>>>,
 ) -> Result<()> {
-    emit(events, Event::Status("Relay'e bağlanıyor".to_owned()));
+    emit(events, Event::Status("Connecting to relay".to_owned()));
     let mut stream = connect(relay_address)?;
     write_message(
         &mut stream,
@@ -409,7 +414,7 @@ fn viewer_worker(
         &stream,
         commands,
         RELAY_RESPONSE_TIMEOUT,
-        "relay claim yanıtı",
+        "relay claim response",
     )? {
         Some(response) => response,
         None => return connection_cancelled(events),
@@ -418,7 +423,10 @@ fn viewer_worker(
         return Err(relay_response_error(response));
     }
 
-    emit(events, Event::Status("Şifreli kanal kuruluyor".to_owned()));
+    emit(
+        events,
+        Event::Status("Establishing encrypted channel".to_owned()),
+    );
     let channel = match establish_secure_channel(stream, Role::Viewer, &invitation, commands)? {
         Some(channel) => channel,
         None => return connection_cancelled(events),
@@ -439,21 +447,25 @@ fn viewer_worker(
     channel.send(&PeerMessage::SessionRequest(request))?;
     emit(
         events,
-        Event::Status("Yerel kullanıcı onayı bekleniyor".to_owned()),
+        Event::Status("Waiting for approval on the remote device".to_owned()),
     );
 
-    let grant =
-        match wait_for_peer_message(&channel, commands, SESSION_GRANT_TIMEOUT, "oturum onayı")? {
-            Some(message) => match message {
-                PeerMessage::SessionGrant(grant) => grant,
-                PeerMessage::Disconnect { reason } => {
-                    emit(events, Event::Stopped(disconnect_text(reason)));
-                    return Ok(());
-                }
-                _ => bail!("oturum onayından önce beklenmeyen mesaj alındı"),
-            },
-            None => return connection_cancelled(events),
-        };
+    let grant = match wait_for_peer_message(
+        &channel,
+        commands,
+        SESSION_GRANT_TIMEOUT,
+        "session approval",
+    )? {
+        Some(message) => match message {
+            PeerMessage::SessionGrant(grant) => grant,
+            PeerMessage::Disconnect { reason } => {
+                emit(events, Event::Stopped(disconnect_text(reason)));
+                return Ok(());
+            }
+            _ => bail!("received an unexpected message before session approval"),
+        },
+        None => return connection_cancelled(events),
+    };
     state.activate(&grant)?;
     configure_session_channel(&channel)?;
     let remote_control = grant.granted_permissions.can_control();
@@ -485,7 +497,7 @@ fn viewer_worker(
                 channel.send(&PeerMessage::Input(input))?;
                 sequence = sequence
                     .checked_add(1)
-                    .context("input sıra numarası tükendi")?;
+                    .context("input sequence number exhausted")?;
             }
             Ok(Command::Stop | Command::Deny) => {
                 let _ = channel.send(&PeerMessage::Disconnect {
@@ -506,7 +518,7 @@ fn viewer_worker(
     running.store(false, Ordering::Release);
     let _ = channel.shutdown();
     let _ = receiver.join();
-    emit(events, Event::Stopped("Uzak oturum sona erdi".to_owned()));
+    emit(events, Event::Stopped("Remote session ended".to_owned()));
     Ok(())
 }
 
@@ -528,14 +540,14 @@ fn spawn_capture_loop(
                     send_frame(&channel, frame_id, frame.width, frame.height, &frame.bytes)?;
                     frame_id = frame_id
                         .checked_add(1)
-                        .context("frame sıra numarası tükendi")?;
+                        .context("frame sequence number exhausted")?;
                     Ok(())
                 })();
                 if let Err(error) = result {
                     if running.swap(false, Ordering::AcqRel) {
                         emit(
                             &events,
-                            Event::Error(format!("Ekran yakalama durdu: {error:#}")),
+                            Event::Error(format!("Screen capture stopped: {error:#}")),
                         );
                     }
                     let _ = channel.shutdown();
@@ -546,7 +558,7 @@ fn spawn_capture_loop(
                 }
             }
         })
-        .context("ekran yakalama thread'i başlatılamadı")
+        .context("failed to start screen capture thread")
 }
 
 fn spawn_input_loop(
@@ -565,11 +577,11 @@ fn spawn_input_loop(
                     Ok(PeerMessage::Input(message)) => {
                         let result = state
                             .authorize_input(&message)
-                            .context("izin verilmeyen input mesajı")
+                            .context("unauthorized input message")
                             .and_then(|()| {
                                 input
                                     .as_mut()
-                                    .context("uzaktan kontrol backend'i etkin değil")?
+                                    .context("remote-control backend is not active")?
                                     .inject(&message.event)?;
                                 pressed.observe(message.event);
                                 Ok(())
@@ -577,7 +589,7 @@ fn spawn_input_loop(
                         if let Err(error) = result {
                             emit(
                                 &events,
-                                Event::Error(format!("Uzak giriş reddedildi: {error:#}")),
+                                Event::Error(format!("Remote input rejected: {error:#}")),
                             );
                             break;
                         }
@@ -595,16 +607,16 @@ fn spawn_input_loop(
                     Ok(_) => {
                         emit(
                             &events,
-                            Event::Error("Host beklenmeyen bir protokol mesajı aldı".to_owned()),
+                            Event::Error("Host received an unexpected protocol message".to_owned()),
                         );
                         break;
                     }
                     Err(error) if channel.is_closed() => {
-                        debug!(%error, "host secure channel kapandı");
+                        debug!(%error, "host secure channel closed");
                         break;
                     }
                     Err(error) => {
-                        emit(&events, Event::Error(format!("Bağlantı koptu: {error:#}")));
+                        emit(&events, Event::Error(format!("Connection lost: {error:#}")));
                         break;
                     }
                 }
@@ -615,7 +627,7 @@ fn spawn_input_loop(
             running.store(false, Ordering::Release);
             let _ = channel.shutdown();
         })
-        .context("uzak giriş thread'i başlatılamadı")
+        .context("failed to start remote input thread")
 }
 
 fn spawn_viewer_receive_loop(
@@ -633,11 +645,11 @@ fn spawn_viewer_receive_loop(
                 let message = match channel.recv() {
                     Ok(message) => message,
                     Err(error) if channel.is_closed() => {
-                        debug!(%error, "viewer secure channel kapandı");
+                        debug!(%error, "viewer secure channel closed");
                         break;
                     }
                     Err(error) => {
-                        emit(&events, Event::Error(format!("Bağlantı koptu: {error:#}")));
+                        emit(&events, Event::Error(format!("Connection lost: {error:#}")));
                         break;
                     }
                 };
@@ -664,12 +676,12 @@ fn spawn_viewer_receive_loop(
                         emit(&events, Event::Stopped(disconnect_text(reason)));
                         break;
                     }
-                    _ => Err(anyhow!("viewer beklenmeyen bir protokol mesajı aldı")),
+                    _ => Err(anyhow!("viewer received an unexpected protocol message")),
                 };
                 if let Err(error) = result {
                     emit(
                         &events,
-                        Event::Error(format!("Uzak frame reddedildi: {error:#}")),
+                        Event::Error(format!("Remote frame rejected: {error:#}")),
                     );
                     break;
                 }
@@ -677,7 +689,7 @@ fn spawn_viewer_receive_loop(
             running.store(false, Ordering::Release);
             let _ = channel.shutdown();
         })
-        .context("frame alıcı thread'i başlatılamadı")
+        .context("failed to start frame receiver thread")
 }
 
 fn send_frame(
@@ -688,21 +700,21 @@ fn send_frame(
     bytes: &[u8],
 ) -> Result<()> {
     if bytes.is_empty() || bytes.len() > MAX_JPEG_FRAME_SIZE {
-        bail!("JPEG frame boyutu protokol sınırının dışında");
+        bail!("JPEG frame size is outside the protocol limit");
     }
     let chunks = bytes.len().div_ceil(MAX_JPEG_CHUNK_SIZE);
-    let chunk_count = u16::try_from(chunks).context("JPEG chunk sayısı u16 sınırını aşıyor")?;
+    let chunk_count = u16::try_from(chunks).context("JPEG chunk count exceeds the u16 limit")?;
     channel.send(&PeerMessage::FrameStart(JpegFrameStart {
         frame_id,
         width,
         height,
-        total_len: u32::try_from(bytes.len()).context("JPEG boyutu u32 sınırını aşıyor")?,
+        total_len: u32::try_from(bytes.len()).context("JPEG size exceeds the u32 limit")?,
         chunk_count,
     }))?;
     for (chunk_index, data) in bytes.chunks(MAX_JPEG_CHUNK_SIZE).enumerate() {
         channel.send(&PeerMessage::FrameChunk(JpegFrameChunk {
             frame_id,
-            chunk_index: u16::try_from(chunk_index).context("chunk index sınırı aşıldı")?,
+            chunk_index: u16::try_from(chunk_index).context("chunk index exceeds the u16 limit")?,
             data: data.to_vec(),
         }))?;
     }
@@ -741,23 +753,23 @@ impl FrameAssembler {
 
     fn push(&mut self, chunk: JpegFrameChunk) -> Result<Option<AssembledFrame>> {
         chunk.validate()?;
-        let pending = self.pending.as_mut().context("frame başlangıcı eksik")?;
+        let pending = self.pending.as_mut().context("frame start is missing")?;
         if chunk.frame_id != pending.start.frame_id || chunk.chunk_index != pending.next_chunk {
-            bail!("frame chunk sırası geçersiz");
+            bail!("invalid frame chunk sequence");
         }
         if pending.bytes.len() + chunk.data.len() > pending.start.total_len as usize {
-            bail!("frame bildirilen uzunluğu aşıyor");
+            bail!("frame exceeds its declared length");
         }
         pending.bytes.extend_from_slice(&chunk.data);
         pending.next_chunk = pending
             .next_chunk
             .checked_add(1)
-            .context("frame chunk sayacı taştı")?;
+            .context("frame chunk counter overflow")?;
         if pending.next_chunk != pending.start.chunk_count {
             return Ok(None);
         }
         if pending.bytes.len() != pending.start.total_len as usize {
-            bail!("tamamlanan frame uzunluğu bildirilen değerle eşleşmiyor");
+            bail!("completed frame length does not match the declared value");
         }
         let completed = self.pending.take().expect("pending frame exists");
         Ok(Some(AssembledFrame {
@@ -774,7 +786,7 @@ fn publish_frame(
 ) -> Result<()> {
     let decoded = media::decode_jpeg(&frame.bytes)?;
     if decoded.width() != frame.width || decoded.height() != frame.height {
-        bail!("JPEG boyutları frame header ile eşleşmiyor");
+        bail!("JPEG dimensions do not match the frame header");
     }
     let rgba = image::DynamicImage::ImageRgb8(decoded)
         .into_rgba8()
@@ -786,7 +798,7 @@ fn publish_frame(
     };
     *latest_frame
         .lock()
-        .map_err(|_| anyhow!("latest-frame kilidi bozuldu"))? = Some(frame);
+        .map_err(|_| anyhow!("latest-frame mutex is poisoned"))? = Some(frame);
     Ok(())
 }
 
@@ -840,7 +852,7 @@ fn update_pressed<T: Copy + PartialEq>(
 fn connect(address: &str) -> Result<TcpStream> {
     let addresses = address
         .to_socket_addrs()
-        .with_context(|| format!("relay adresi çözümlenemedi: {address}"))?;
+        .with_context(|| format!("failed to resolve relay address: {address}"))?;
     let mut last_error = None;
     for socket in addresses {
         match TcpStream::connect_timeout(&socket, CONNECT_TIMEOUT) {
@@ -854,8 +866,8 @@ fn connect(address: &str) -> Result<TcpStream> {
         }
     }
     Err(last_error.map_or_else(
-        || anyhow!("relay adresi geçerli bir ağ adresi üretmedi"),
-        |error| anyhow!(error).context(format!("relay'e bağlanılamadı: {address}")),
+        || anyhow!("relay address did not resolve to a valid network address"),
+        |error| anyhow!(error).context(format!("failed to connect to relay: {address}")),
     ))
 }
 
@@ -912,7 +924,7 @@ fn wait_for_relay_response(
             let result = read_message::<_, RelayResponse>(&mut reader);
             let _ = result_sender.send(result);
         })
-        .context("relay yanıt worker'ı başlatılamadı")?;
+        .context("failed to start relay response worker")?;
 
     let outcome = poll_cancellable(&result_receiver, commands, timeout);
     if !matches!(&outcome, CancellableWait::Completed(_)) {
@@ -920,15 +932,15 @@ fn wait_for_relay_response(
     }
     let joined = worker.join();
     if joined.is_err() {
-        bail!("{operation} worker'ı panikledi");
+        bail!("{operation} worker panicked");
     }
 
     match outcome {
         CancellableWait::Completed(result) => Ok(Some(result?)),
         CancellableWait::Cancelled => Ok(None),
-        CancellableWait::TimedOut => bail!("{operation} zaman aşımına uğradı"),
+        CancellableWait::TimedOut => bail!("{operation} timed out"),
         CancellableWait::WorkerDisconnected => {
-            bail!("{operation} sonucu alınmadan worker kapandı")
+            bail!("worker stopped before the {operation} result was received")
         }
     }
 }
@@ -950,7 +962,7 @@ fn establish_secure_channel(
             let result = SecureChannel::establish(stream, role, &invitation);
             let _ = result_sender.send(result);
         })
-        .context("şifreli kanal worker'ı başlatılamadı")?;
+        .context("failed to start encrypted-channel worker")?;
 
     let outcome = poll_cancellable(&result_receiver, commands, HANDSHAKE_TIMEOUT);
     if !matches!(&outcome, CancellableWait::Completed(_)) {
@@ -958,17 +970,17 @@ fn establish_secure_channel(
     }
     let joined = worker.join();
     if joined.is_err() {
-        bail!("şifreli kanal worker'ı panikledi");
+        bail!("encrypted-channel worker panicked");
     }
 
     match outcome {
         CancellableWait::Completed(result) => result
-            .context("uçtan uca şifreli kanal kurulamadı")
+            .context("failed to establish end-to-end encrypted channel")
             .map(Some),
         CancellableWait::Cancelled => Ok(None),
-        CancellableWait::TimedOut => bail!("şifreli kanal el sıkışması zaman aşımına uğradı"),
+        CancellableWait::TimedOut => bail!("encrypted-channel handshake timed out"),
         CancellableWait::WorkerDisconnected => {
-            bail!("şifreli kanal sonucu alınmadan worker kapandı")
+            bail!("worker stopped before the encrypted-channel result was received")
         }
     }
 }
@@ -988,7 +1000,7 @@ fn wait_for_peer_message(
             let result = reader.recv();
             let _ = result_sender.send(result);
         })
-        .context("oturum kurulum worker'ı başlatılamadı")?;
+        .context("failed to start session setup worker")?;
 
     let outcome = poll_cancellable(&result_receiver, commands, timeout);
     if !matches!(&outcome, CancellableWait::Completed(_)) {
@@ -996,17 +1008,17 @@ fn wait_for_peer_message(
     }
     let joined = worker.join();
     if joined.is_err() {
-        bail!("{operation} worker'ı panikledi");
+        bail!("{operation} worker panicked");
     }
 
     match outcome {
         CancellableWait::Completed(result) => result
-            .with_context(|| format!("{operation} belirlenen sürede alınamadı"))
+            .with_context(|| format!("{operation} was not received within the allotted time"))
             .map(Some),
         CancellableWait::Cancelled => Ok(None),
-        CancellableWait::TimedOut => bail!("{operation} zaman aşımına uğradı"),
+        CancellableWait::TimedOut => bail!("{operation} timed out"),
         CancellableWait::WorkerDisconnected => {
-            bail!("{operation} sonucu alınmadan worker kapandı")
+            bail!("worker stopped before the {operation} result was received")
         }
     }
 }
@@ -1018,13 +1030,13 @@ fn configure_session_channel(channel: &SecureChannel) -> Result<()> {
 }
 
 fn connection_cancelled(events: &EventSink) -> Result<()> {
-    emit(events, Event::Stopped("Bağlantı iptal edildi".to_owned()));
+    emit(events, Event::Stopped("Connection cancelled".to_owned()));
     Ok(())
 }
 
 fn validate_relay_address(address: &str) -> Result<()> {
     if address.trim().is_empty() || address.trim() != address {
-        bail!("relay adresi boş olamaz ve başında/sonunda boşluk içeremez");
+        bail!("relay address cannot be empty or contain leading or trailing whitespace");
     }
     Ok(())
 }
@@ -1039,13 +1051,12 @@ fn choose_monitor(monitors: &[MonitorInfo]) -> Option<MonitorInfo> {
 
 fn random_id<const N: usize>() -> Result<[u8; N]> {
     let mut output = [0_u8; N];
-    getrandom::fill(&mut output).map_err(|_| anyhow!("işletim sistemi rastgeleliği alınamadı"))?;
+    getrandom::fill(&mut output).map_err(|_| anyhow!("failed to obtain OS randomness"))?;
     if output.iter().all(|byte| *byte == 0) {
-        getrandom::fill(&mut output)
-            .map_err(|_| anyhow!("işletim sistemi rastgeleliği alınamadı"))?;
+        getrandom::fill(&mut output).map_err(|_| anyhow!("failed to obtain OS randomness"))?;
     }
     if output.iter().all(|byte| *byte == 0) {
-        bail!("rastgele kimlik sıfır üretildi");
+        bail!("random identifier generation returned all zeroes");
     }
     Ok(output)
 }
@@ -1068,18 +1079,18 @@ fn local_viewer_name() -> String {
 
 fn relay_response_error(response: RelayResponse) -> anyhow::Error {
     match response {
-        RelayResponse::Error { code } => anyhow!("relay isteği reddetti: {code:?}"),
-        other => anyhow!("relay beklenmeyen yanıt verdi: {other:?}"),
+        RelayResponse::Error { code } => anyhow!("relay rejected the request: {code:?}"),
+        other => anyhow!("relay returned an unexpected response: {other:?}"),
     }
 }
 
 fn disconnect_text(reason: DisconnectReason) -> String {
     match reason {
-        DisconnectReason::Normal => "Karşı taraf oturumu kapattı",
-        DisconnectReason::Rejected => "Bağlantı isteği reddedildi",
-        DisconnectReason::Revoked => "Oturum izni geri alındı",
-        DisconnectReason::Timeout => "Oturum zaman aşımına uğradı",
-        DisconnectReason::ProtocolError => "Oturum protokol hatasıyla kapandı",
+        DisconnectReason::Normal => "The remote peer ended the session",
+        DisconnectReason::Rejected => "Connection request rejected",
+        DisconnectReason::Revoked => "Session permission revoked",
+        DisconnectReason::Timeout => "Session timed out",
+        DisconnectReason::ProtocolError => "Session closed because of a protocol error",
     }
     .to_owned()
 }
@@ -1177,12 +1188,12 @@ mod tests {
         let events = EventSink::new(sender);
         let worker_events = events.clone();
 
-        emit(&worker_events, Event::Stopped("ilk kapanış".to_owned()));
-        emit(&events, Event::Stopped("yinelenen kapanış".to_owned()));
+        emit(&worker_events, Event::Stopped("first shutdown".to_owned()));
+        emit(&events, Event::Stopped("duplicate shutdown".to_owned()));
 
         assert!(matches!(
             receiver.try_recv(),
-            Ok(Event::Stopped(message)) if message == "ilk kapanış"
+            Ok(Event::Stopped(message)) if message == "first shutdown"
         ));
         assert!(matches!(
             receiver.try_recv(),
@@ -1196,20 +1207,17 @@ mod tests {
         let events = EventSink::new(sender);
         let subthread_events = events.clone();
 
-        emit(&events, Event::Status("aktif".to_owned()));
-        emit(
-            &subthread_events,
-            Event::Error("capture başarısız".to_owned()),
-        );
-        emit(&events, Event::Stopped("normal worker kapanışı".to_owned()));
+        emit(&events, Event::Status("active".to_owned()));
+        emit(&subthread_events, Event::Error("capture failed".to_owned()));
+        emit(&events, Event::Stopped("normal worker shutdown".to_owned()));
 
         assert!(matches!(
             receiver.try_recv(),
-            Ok(Event::Status(message)) if message == "aktif"
+            Ok(Event::Status(message)) if message == "active"
         ));
         assert!(matches!(
             receiver.try_recv(),
-            Ok(Event::Error(message)) if message == "capture başarısız"
+            Ok(Event::Error(message)) if message == "capture failed"
         ));
         assert!(matches!(
             receiver.try_recv(),

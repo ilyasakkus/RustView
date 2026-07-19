@@ -1,92 +1,100 @@
-# Güvenlik politikası
+# Security policy
 
-RustView güvenlik raporlarını ciddiye alır. Proje erken geliştirme aşamasındadır ve
-henüz üretimde kullanım için desteklenen, bağımsız denetimden geçmiş bir release'i
-yoktur.
+RustView takes security reports seriously. The project is in an early stage of
+development and does not yet have an independently audited release that is
+supported for production use.
 
-## Desteklenen sürümler
+## Supported versions
 
-| Sürüm | Güvenlik güncellemesi |
+| Version | Security updates |
 | --- | --- |
-| En güncel `main` / geliştirme sürümü | En iyi çaba ile |
-| Eski commit, fork ve değiştirilmiş build'ler | Desteklenmiyor |
+| Latest `main` / development version | Best effort |
+| Old commits, forks, and modified builds | Not supported |
 
-İlk stabil release yayımlandığında bu tablo semver ve destek süresiyle
-güncellenecektir.
+This table will be updated with semantic versions and support periods when the
+first stable release is published.
 
-## Güvenlik açığı bildirme
+## Reporting a vulnerability
 
-Lütfen güvenlik açığı için herkese açık GitHub issue, discussion veya pull request
-açmayın.
+Do not open a public GitHub issue, discussion, or pull request for a vulnerability.
 
-Tercih edilen kanal, repository'nin **Security → Advisories → Report a
-vulnerability** bölümündeki GitHub Private Vulnerability Reporting akışıdır. Bu
-seçenek görünmüyorsa repository sahibiyle GitHub profilinde listelenen özel iletişim
-kanalından bağlantı kurun ve teknik ayrıntıları public alana koymayın.
+The preferred channel is GitHub Private Vulnerability Reporting under
+**Security → Advisories → Report a vulnerability** in the repository. If this
+option is unavailable, contact the repository owner through a private channel
+listed on their GitHub profile and do not place technical details in a public
+forum.
 
-Rapora mümkünse şunları ekleyin:
+When possible, include:
 
-- Etkilenen commit/release ve işletim sistemi
-- Etkilenen bileşen: desktop, core, invitation/Noise, framing veya relay
-- Önkoşullar ve adım adım yeniden üretim
-- Beklenen ve gerçekleşen davranış
-- Etki: ekran gizliliği, yetkisiz input, key/secret sızıntısı, RCE, DoS vb.
-- Varsa minimal proof of concept, log ve stack trace
-- Önerilen düzeltme veya geçici azaltım
+- The affected commit/release and operating system
+- The affected component: desktop, core, device ID/password and Noise, framing, or
+  relay
+- Preconditions and step-by-step reproduction instructions
+- Expected and actual behavior
+- Impact: screen confidentiality, unauthorized input, key/secret disclosure, RCE,
+  denial of service, and so on
+- A minimal proof of concept, logs, and stack trace, if available
+- A proposed fix or temporary mitigation
 
-Gerçek davet secret'ı, kişisel ekran görüntüsü, kimlik bilgisi veya üçüncü kişiye ait
-veri göndermeyin. Test verisi kullanın.
+Do not send real access passwords, personal screenshots, credentials, or third-party
+data. Use test data.
 
-## Yanıt süreci
+## Response process
 
-Bakım ekibi en iyi çaba ile:
+On a best-effort basis, the maintainers will:
 
-1. Raporu aldığını özel kanaldan doğrular.
-2. Etki ve yeniden üretilebilirliği değerlendirir.
-3. Raporlayan kişiyle düzeltme ve açıklama zamanını koordine eder.
-4. Uygun olduğunda CVE/GHSA ve güvenlik notu yayımlar.
-5. Düzeltme yayımlandıktan sonra koordineli açıklamayı tamamlar.
+1. Privately acknowledge receipt of the report.
+2. Assess the impact and reproducibility.
+3. Coordinate a fix and disclosure timeline with the reporter.
+4. Publish a CVE/GHSA and security advisory when appropriate.
+5. Complete coordinated disclosure after the fix is released.
 
-Proje gönüllü ve erken aşamada olduğu için sabit yanıt veya düzeltme SLA'sı garanti
-edilmez. Kritik bir sorun doğrulanırsa etkilenmiş kullanımın durdurulması ve relay'in
-kapatılması önerilebilir.
+Because this is an early-stage volunteer project, no fixed response or remediation
+SLA is guaranteed. If a critical issue is confirmed, users may be advised to stop
+affected usage and shut down the relay.
 
-## Özellikle ilgilendiğimiz alanlar
+## Areas of particular interest
 
-- Invitation secret'ın relay/log/UI üzerinden sızması
-- Noise handshake bypass, key/nonce tekrar kullanımı veya kimlik karışması
-- Relay'in plaintext ekran/input elde edebilmesi
-- Yerel onaydan önce capture veya uzaktan giriş
-- View-only oturumda input uygulanması ya da permission escalation
-- Framing/JPEG/network input üzerinden panic, sınırsız allocation veya code execution
-- Route claim/replay ile yetkisiz eşleşme
-- Disconnect sonrasında basılı kalan sentetik input
-- Update/package/supply-chain bütünlüğü
+- Access-password or internal invitation-secret disclosure through the relay,
+  logs, or UI
+- Noise handshake bypass, key/nonce reuse, or identity confusion
+- The relay gaining access to plaintext screen or input data
+- Capture or remote input before local approval
+- Input being applied during a view-only session or permission escalation
+- Panic, unbounded allocation, or code execution through framing, JPEG, or network
+  input
+- Unauthorized matching through route claiming or replay
+- Synthetic input remaining pressed after disconnect
+- Update, packaging, or supply-chain integrity
 
-## Genellikle güvenlik açığı sayılmayanlar
+## Generally out of scope
 
-Aşağıdakiler belgelenmiş sınırlar içindeyse tek başına güvenlik açığı değildir:
+The following are not vulnerabilities by themselves when they remain within the
+documented limitations:
 
-- Relay'in IP, route, trafik miktarı/zamanlaması ve oturum süresi metadatasını görmesi
-- Kötü relay'in bağlantıyı düşürmesi veya geciktirmesi
-- Windows UAC secure desktop ya da login ekranının kontrol edilememesi
-- Wayland'da portal onayı gerekmesi veya input desteğinin olmaması
-- X11'in yerel istemciler arası zayıf izolasyonu
-- Host/controller işletim sisteminin zaten admin/root seviyesinde ele geçirilmiş olması
-- Yetkili controller'ın görüntüyü harici araçla kaydetmesi
-- Teorik ve pratik etkisi gösterilmeyen otomatik scanner raporları
+- The relay observing IP addresses, routes, traffic volume/timing, and session
+  duration metadata
+- A malicious relay dropping or delaying a connection
+- Inability to control the Windows UAC secure desktop or login screen
+- Wayland requiring portal approval or not supporting input
+- X11's weak isolation between local clients
+- A host or controller operating system that is already compromised at the
+  Administrator/root level
+- An authorized controller recording the screen with an external tool
+- Automated scanner reports without a demonstrated theoretical and practical impact
 
-Yine de sınırdan emin değilseniz özel olarak raporlayın.
+If you are unsure whether an issue falls within a documented boundary, report it
+privately anyway.
 
-## Güvenli kullanım
+## Safe use
 
-- Yalnız güvendiğiniz kişiden gelen daveti kabul edin.
-- Davetin tamamını parola gibi koruyun ve güvenli kanaldan paylaşın.
-- Bağlantı isteğindeki izinleri host ekranında kontrol edin.
-- İhtiyaç yoksa control vermeyin; view-only kullanın.
-- Oturum göstergesini izleyin ve işiniz bittiğinde bağlantıyı kapatın.
-- RustView'i root/Administrator olarak çalıştırmayın.
-- Public relay kurmadan önce rate limit, timeout ve log redaksiyonu yapılandırın.
+- Share your device ID and temporary access password only with people you trust.
+- Protect the access password like a credential and send it through a secure channel.
+- Review the requested permissions on the host screen.
+- Do not grant control when it is unnecessary; use view-only mode.
+- Monitor the active-session indicator and disconnect when finished.
+- Do not run RustView as root or Administrator.
+- Configure rate limits, timeouts, and log redaction before operating a public relay.
 
-Teknik tehdit modeli ve kriptografik ayrıntılar için
-[docs/SECURITY.md](docs/SECURITY.md) belgesine bakın.
+See [docs/SECURITY.md](docs/SECURITY.md) for the technical threat model and
+cryptographic details.

@@ -42,7 +42,7 @@ pub(crate) fn initial_relay_address() -> InitialRelayAddress {
             let mut initial = choose_initial_relay(None, load_saved_relay_address());
             prepend_warning(
                 &mut initial.warning,
-                "RUSTVIEW_RELAY geçerli bir metin olmadığı için kullanılmadı.",
+                "RUSTVIEW_RELAY was ignored because it is not valid text.",
             );
             initial
         }
@@ -71,7 +71,7 @@ fn choose_initial_relay(
                     warning: None,
                 };
             }
-            Err(error) => warnings.push(format!("RUSTVIEW_RELAY kullanılmadı: {error}")),
+            Err(error) => warnings.push(format!("RUSTVIEW_RELAY was ignored: {error}")),
         }
     }
 
@@ -79,7 +79,7 @@ fn choose_initial_relay(
         Ok(Some(address)) => address,
         Ok(None) => DEFAULT_RELAY_ADDRESS.to_owned(),
         Err(error) => {
-            warnings.push(format!("Kayıtlı relay ayarı okunamadı: {error:#}"));
+            warnings.push(format!("Failed to read the saved relay setting: {error:#}"));
             DEFAULT_RELAY_ADDRESS.to_owned()
         }
     };
@@ -221,35 +221,35 @@ fn parse_record(record: &[u8]) -> Option<String> {
 fn normalize_relay_address(value: &str) -> Result<String> {
     let value = value.trim();
     if value.is_empty() {
-        bail!("relay adresi boş bırakılamaz");
+        bail!("relay address cannot be empty");
     }
     if value.len() > MAX_RELAY_ADDRESS_LEN {
-        bail!("relay adresi en fazla {MAX_RELAY_ADDRESS_LEN} karakter olabilir");
+        bail!("relay address cannot exceed {MAX_RELAY_ADDRESS_LEN} characters");
     }
     if !value.is_ascii()
         || value
             .bytes()
             .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
     {
-        bail!("relay adresi boşluk veya geçersiz karakter içeremez");
+        bail!("relay address cannot contain whitespace or invalid characters");
     }
     let (host, port) = value
         .rsplit_once(':')
-        .ok_or_else(|| anyhow!("relay adresi host:port biçiminde olmalıdır"))?;
+        .ok_or_else(|| anyhow!("relay address must use the host:port format"))?;
     if host.is_empty() || host.contains('/') {
-        bail!("relay host değeri geçersiz");
+        bail!("relay host is invalid");
     }
     if host.contains(':') && !(host.starts_with('[') && host.ends_with(']')) {
-        bail!("IPv6 relay adresi [adres]:port biçiminde olmalıdır");
+        bail!("IPv6 relay address must use the [address]:port format");
     }
     if matches!(host, "[]" | "[::]") {
-        bail!("relay host değeri bağlanılabilir bir adres olmalıdır");
+        bail!("relay host must be a connectable address");
     }
     let port = port
         .parse::<u16>()
-        .map_err(|_| anyhow!("relay port değeri 1-65535 aralığında olmalıdır"))?;
+        .map_err(|_| anyhow!("relay port must be in the range 1-65535"))?;
     if port == 0 {
-        bail!("relay port değeri 1-65535 aralığında olmalıdır");
+        bail!("relay port must be in the range 1-65535");
     }
     Ok(value.to_owned())
 }
