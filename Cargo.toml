@@ -12,7 +12,7 @@ edition = "2024"
 rust-version = "1.92"
 license = "MIT"
 authors = ["RustView contributors"]
-repository = "https://github.com/rustview/rustview"
+repository = "https://github.com/ilyasakkus/RustView"
 
 [workspace.dependencies]
 anyhow = "1.0.100"

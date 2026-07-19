@@ -1,7 +1,8 @@
 /target/
+/dist/*
+!/dist/README.md
 *.log
 .DS_Store
 .idea/
 .vscode/
 rustview.toml
-

@@ -1,0 +1,190 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to package, with or without a leading v
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  validate-version:
+    name: Validate release version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Match the release and workspace versions
+        id: version
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            requested="${GITHUB_REF_NAME#v}"
+          else
+            requested="${REQUESTED_VERSION#v}"
+          fi
+
+          if [[ ! "$requested" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release versions must use major.minor.patch format." >&2
+            exit 1
+          fi
+
+          manifest_version="$(sed -nE 's/^version = "([^"]+)"/\1/p' Cargo.toml | head -n 1)"
+          if [[ "$requested" != "$manifest_version" ]]; then
+            echo "Requested version $requested does not match Cargo.toml version $manifest_version." >&2
+            exit 1
+          fi
+
+          echo "version=$requested" >> "$GITHUB_OUTPUT"
+
+  package-macos:
+    name: Package macOS universal
+    needs: validate-version
+    runs-on: macos-15
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - name: Build Apple silicon binaries
+        run: cargo build --locked --release --target aarch64-apple-darwin -p rustview-desktop -p rustview-relay
+      - name: Build Intel binaries
+        run: cargo build --locked --release --target x86_64-apple-darwin -p rustview-desktop -p rustview-relay
+      - name: Verify native command entry points
+        run: |
+          target/aarch64-apple-darwin/release/rustview-desktop --help
+          target/aarch64-apple-darwin/release/rustview-relay --help
+      - name: Assemble dist package
+        run: ./scripts/package-macos.sh "${{ needs.validate-version.outputs.version }}"
+      - name: Inspect archive
+        run: unzip -l dist/RustView-macOS-universal.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-macos
+          path: dist/RustView-macOS-universal.zip
+          if-no-files-found: error
+          compression-level: 0
+
+  package-windows:
+    name: Package Windows x86_64
+    needs: validate-version
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build release binaries
+        run: cargo build --locked --release -p rustview-desktop -p rustview-relay
+      - name: Verify command entry points
+        shell: pwsh
+        run: |
+          & target/release/rustview-desktop.exe --help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & target/release/rustview-relay.exe --help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Assemble dist package
+        shell: pwsh
+        run: ./scripts/package-windows.ps1
+      - name: Inspect archive
+        shell: pwsh
+        run: tar -tf dist/RustView-Windows-x86_64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: dist/RustView-Windows-x86_64.zip
+          if-no-files-found: error
+          compression-level: 0
+
+  package-linux:
+    name: Package Linux x86_64
+    needs: validate-version
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev libdbus-1-dev libegl1-mesa-dev libpipewire-0.3-dev libwayland-dev libx11-dev libxcb1-dev libxkbcommon-dev libxrandr-dev pkg-config
+      - name: Build release binaries
+        run: cargo build --locked --release -p rustview-desktop -p rustview-relay
+      - name: Verify native command entry points
+        run: |
+          target/release/rustview-desktop --help
+          target/release/rustview-relay --help
+          ldd target/release/rustview-desktop
+      - name: Assemble dist package
+        run: ./scripts/package-linux.sh
+      - name: Inspect archive
+        run: tar -tzf dist/RustView-Linux-x86_64.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: dist/RustView-Linux-x86_64.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs:
+      - validate-version
+      - package-macos
+      - package-windows
+      - package-linux
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Create checksums
+        working-directory: dist
+        run: |
+          sha256sum \
+            RustView-macOS-universal.zip \
+            RustView-Windows-x86_64.zip \
+            RustView-Linux-x86_64.tar.gz \
+            > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: Create or update the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          assets=(
+            dist/RustView-macOS-universal.zip
+            dist/RustView-Windows-x86_64.zip
+            dist/RustView-Linux-x86_64.tar.gz
+            dist/SHA256SUMS.txt
+          )
+
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --generate-notes \
+              --title "RustView $GITHUB_REF_NAME"
+          fi

@@ -10,6 +10,60 @@ provide mouse and keyboard control only with the local user's explicit consent.
 > TeamViewer or AnyDesk. Do not share your access password with people you do
 > not trust, and do not use RustView on sensitive systems.
 
+## Download
+
+Prebuilt RustView packages are published with each tagged release.
+
+| Platform | Architecture | Download |
+| --- | --- | --- |
+| macOS 13+ | Intel and Apple silicon | [Download for macOS](https://github.com/ilyasakkus/RustView/releases/latest/download/RustView-macOS-universal.zip) |
+| Windows | 64-bit x86 | [Download for Windows](https://github.com/ilyasakkus/RustView/releases/latest/download/RustView-Windows-x86_64.zip) |
+| Linux | 64-bit x86 | [Download for Linux](https://github.com/ilyasakkus/RustView/releases/latest/download/RustView-Linux-x86_64.tar.gz) |
+
+[View all releases](https://github.com/ilyasakkus/RustView/releases) ·
+[Download SHA-256 checksums](https://github.com/ilyasakkus/RustView/releases/latest/download/SHA256SUMS.txt)
+
+> [!IMPORTANT]
+> RustView is currently distributed as an unsigned early-development build.
+> macOS Gatekeeper and Windows SmartScreen may display a warning. Download
+> packages only from this repository and verify the published SHA-256 checksums.
+
+The direct links become available after the first tagged release is published.
+RustView does not currently provide a hosted public relay service. Both computers
+must use the same reachable relay address. Every release archive contains the
+desktop application and the optional `rustview-relay` server.
+
+### Run a downloaded package
+
+#### macOS
+
+1. Extract `RustView-macOS-universal.zip`.
+2. Move `RustView.app` to the Applications folder.
+3. Control-click `RustView.app`, select **Open**, and confirm the first launch if
+   Gatekeeper blocks the unsigned build.
+4. Grant Screen Recording permission when sharing the screen. Grant Accessibility
+   permission only when keyboard and mouse control is required.
+
+#### Windows
+
+1. Extract the complete `RustView-Windows-x86_64.zip` archive.
+2. Run `RustView.exe`.
+3. Allow network access through Windows Firewall when prompted.
+
+#### Linux
+
+Extract the archive and start RustView:
+
+```bash
+tar -xzf RustView-Linux-x86_64.tar.gz
+cd RustView-Linux-x86_64
+./rustview
+```
+
+The Linux archive is dynamically linked and targets Ubuntu 22.04 or a compatible
+distribution. The native libraries listed in [Requirements](#requirements) may
+still be required on your system.
+
 ## Initial MVP scope
 
 The first usable release is intentionally small:
@@ -88,19 +142,22 @@ sudo apt-get install -y \
 Package names may vary by distribution. Wayland screen capture also requires a
 working XDG Desktop Portal and PipeWire installation.
 
-## Running in a development environment
+## Build and run from source
 
-After cloning the repository, validate the entire workspace first:
+Install the platform requirements above and Rust 1.92 or later, then clone and
+validate the entire workspace:
 
 ```bash
-cargo build --workspace
-cargo test --workspace
+git clone https://github.com/ilyasakkus/RustView.git
+cd RustView
+cargo build --locked --workspace
+cargo test --locked --workspace
 ```
 
 Start the relay in one terminal:
 
 ```bash
-cargo run -p rustview-relay -- --listen 127.0.0.1:21116
+cargo run --locked --release -p rustview-relay -- --listen 127.0.0.1:21116
 ```
 
 The relay listens on `0.0.0.0:21116` by default. For local development, explicitly
@@ -118,7 +175,7 @@ responsible for port and firewall configuration when testing over the internet.
 Then launch the desktop application on the host and controller computers:
 
 ```bash
-cargo run -p rustview-desktop
+cargo run --locked --release -p rustview-desktop
 ```
 
 The development flow is:
@@ -137,7 +194,7 @@ The development flow is:
    stop the session at any time.
 
 The temporary password changes when the application restarts or when the
-**Regenerate** action is selected in the UI. Although a password can be used for
+**Generate new** action is selected in the UI. Although a password can be used for
 multiple connection requests during the same application run, every request still
 requires new local approval on the host. RustView does not provide unattended
 access.
@@ -147,15 +204,15 @@ desktop UI and restored on the next launch. If set, the `RUSTVIEW_RELAY`
 environment variable takes precedence over the saved value:
 
 ```bash
-cargo run -p rustview-relay -- --help
-RUSTVIEW_RELAY=127.0.0.1:21116 cargo run -p rustview-desktop
+cargo run --locked -p rustview-relay -- --help
+RUSTVIEW_RELAY=127.0.0.1:21116 cargo run --locked --release -p rustview-desktop
 ```
 
 PowerShell equivalent:
 
 ```powershell
 $env:RUSTVIEW_RELAY = "127.0.0.1:21116"
-cargo run -p rustview-desktop
+cargo run --locked --release -p rustview-desktop
 ```
 
 RustView persists only the public device ID and the non-secret relay address
@@ -167,12 +224,12 @@ set `RUSTVIEW_CONFIG_DIR` to a directory; RustView creates both files there. The
 temporary password is never written to that directory.
 
 ```bash
-RUSTVIEW_CONFIG_DIR=/tmp/rustview-config cargo run -p rustview-desktop
+RUSTVIEW_CONFIG_DIR=/tmp/rustview-config cargo run --locked --release -p rustview-desktop
 ```
 
 ```powershell
 $env:RUSTVIEW_CONFIG_DIR = "C:\Temp\rustview-config"
-cargo run -p rustview-desktop
+cargo run --locked --release -p rustview-desktop
 ```
 
 ## Platform permissions
