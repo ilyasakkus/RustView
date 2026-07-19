@@ -47,8 +47,8 @@ lipo -create \
     "$arm_dir/rustview-relay" \
     "$intel_dir/rustview-relay" \
     -output "$package_root/rustview-relay"
-lipo -verify_arch arm64 x86_64 "$app_contents/MacOS/RustView"
-lipo -verify_arch arm64 x86_64 "$package_root/rustview-relay"
+lipo "$app_contents/MacOS/RustView" -verify_arch arm64 x86_64
+lipo "$package_root/rustview-relay" -verify_arch arm64 x86_64
 chmod 755 "$app_contents/MacOS/RustView" "$package_root/rustview-relay"
 
 cp "$repo_root/packaging/macos/Info.plist" "$app_contents/Info.plist"
@@ -61,6 +61,8 @@ plutil -lint "$app_contents/Info.plist"
 cp "$repo_root/README.md" "$repo_root/LICENSE-MIT" "$package_root/"
 codesign --force --deep --sign - "$package_root/RustView.app"
 codesign --force --sign - "$package_root/rustview-relay"
+codesign --verify --deep --strict "$package_root/RustView.app"
+codesign --verify --strict "$package_root/rustview-relay"
 
 if [[ -e "$archive" ]]; then
     rm -- "$archive"
